@@ -20,7 +20,7 @@ wsgidav==3.1.1
 crc32c==2.2.post0
 xmltodict==0.12.0
 google-compute-engine==2.8.13
-google-cloud-storage==1.41.0
+google-cloud-storage==1.41.1
 
 urllib3==1.26.6
 
@@ -31,7 +31,7 @@ pydocstyle==6.1.1
 jaraco.windows==5.5.0
 
 # pylint requirements
-pylint==2.8.3
+pylint==2.9.5
 # we use this to suppress pytest-related false positives in our tests.
 pylint-pytest==1.0.3
 # we use this to suppress some messages in tests, eg: foo/bar naming,
