@@ -94,7 +94,7 @@ class GDrive(Base, CloudURLInfo):
 
     @_gdrive_retry
     def mkdir(self, mode=0o777, parents=False, exist_ok=False):
-        if not self.client.exists(self.path):
+        if not self.client.info(self.path):
             self.client.mkdir(self.path)
 
     @_gdrive_retry
@@ -124,5 +124,5 @@ def gdrive(test_config, make_tmp_dir):
     fs = GDriveFileSystem(
         gdrive_credentials_tmp_dir=tmp_dir.dvc.tmp_dir, **ret.config
     )
-    fs._gdrive_create_dir("root", fs.path_info.path)
+    fs.fs._gdrive_create_dir("root", fs.path_info.path)
     yield ret
