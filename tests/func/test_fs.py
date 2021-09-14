@@ -488,7 +488,12 @@ def test_download_callback(tmp_dir, dvc, cloud):
         pytest.lazy_fixture("hdfs"),
         pytest.lazy_fixture("local_cloud"),
         pytest.lazy_fixture("s3"),
-        pytest.lazy_fixture("ssh"),
+        pytest.param(
+            pytest.lazy_fixture("ssh"),
+            marks=pytest.mark.skipif(
+                os.name == "nt", reason="unsupported on Windows."
+            ),
+        ),
     ],
 )
 def test_download_dir_callback(tmp_dir, dvc, cloud):
