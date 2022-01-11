@@ -239,6 +239,7 @@ def test_remote_modify_local_on_repo_config(tmp_dir, dvc):
     assert dvc.config["remote"]["myremote"] == {
         "url": "http://example.com/path",
         "user": "xxx",
+        "verify": False,
     }
 
 
@@ -246,14 +247,15 @@ def test_external_dir_resource_on_no_cache(tmp_dir, dvc, tmp_path_factory):
     # https://github.com/iterative/dvc/issues/2647, is some situations
     # (external dir dependency) cache is required to calculate dir md5
     external_dir = tmp_path_factory.mktemp("external_dir")
-    (external_dir / "file").write_text("content")
+    file = external_dir / "file"
 
     dvc.odb.local = None
     with pytest.raises(RemoteCacheRequiredError):
         dvc.run(
-            cmd="echo hello world",
-            outs=[os.fspath(external_dir)],
-            single_stage=True,
+            cmd=f"echo content > {file}",
+            outs=[os.fspath(file)],
+            name="echo",
+            external=True,
         )
 
 

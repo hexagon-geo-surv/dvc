@@ -10,13 +10,15 @@ class CmdLive(CmdBase):
     UNINITIALIZED = True
 
     def _run(self, target, revs=None):
+        from dvc.render.utils import match_renderers, render
+
         metrics, plots = self.repo.live.show(target=target, revs=revs)
 
         if plots:
             html_path = Path.cwd() / (self.args.target + "_html")
-            from dvc.render.utils import render
 
-            index_path = render(self.repo, plots, metrics, html_path)
+            renderers = match_renderers(plots, self.repo.plots.templates)
+            index_path = render(self.repo, renderers, metrics, html_path)
             ui.write(index_path.as_uri())
             return 0
         return 1

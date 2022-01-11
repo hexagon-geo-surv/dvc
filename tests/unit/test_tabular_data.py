@@ -221,35 +221,95 @@ def test_dropna(axis, how, data, expected):
 
 
 @pytest.mark.parametrize(
-    "axis,expected",
+    "axis,expected,ignore_empty",
     [
         (
             "rows",
             [
-                ["foo", "", ""],
-                ["foo", "foo", ""],
+                ["foo", "-", "-"],
+                ["foo", "foo", "-"],
                 ["foo", "bar", "foobar"],
             ],
+            True,
         ),
-        ("cols", [[""], ["foo"], ["foo"], ["bar"]]),
+        ("cols", [["-"], ["foo"], ["foo"], ["bar"]], True),
+        (
+            "cols",
+            [
+                ["-", "-"],
+                ["foo", "-"],
+                ["foo", "-"],
+                ["bar", "foobar"],
+            ],
+            False,
+        ),
     ],
 )
-def test_drop_duplicates(axis, expected):
-    td = TabularData(["col-1", "col-2", "col-3"])
+def test_drop_duplicates(axis, expected, ignore_empty):
+    td = TabularData(["col-1", "col-2", "col-3"], fill_value="-")
     td.extend(
         [["foo"], ["foo", "foo"], ["foo", "foo"], ["foo", "bar", "foobar"]]
     )
 
     assert list(td) == [
-        ["foo", "", ""],
-        ["foo", "foo", ""],
-        ["foo", "foo", ""],
+        ["foo", "-", "-"],
+        ["foo", "foo", "-"],
+        ["foo", "foo", "-"],
         ["foo", "bar", "foobar"],
     ]
 
-    td.drop_duplicates(axis)
+    td.drop_duplicates(axis, ignore_empty=ignore_empty)
 
     assert list(td) == expected
+
+
+def test_drop_duplicates_ignore_empty():
+    td = TabularData(["col-1", "col-2", "col-3"], fill_value="-")
+    td.extend(
+        [["foo"], ["foo", "foo"], ["foo", "foo"], ["foo", "bar", "foobar"]]
+    )
+
+    assert list(td) == [
+        ["foo", "-", "-"],
+        ["foo", "foo", "-"],
+        ["foo", "foo", "-"],
+        ["foo", "bar", "foobar"],
+    ]
+
+    td.drop_duplicates("cols", ignore_empty=False)
+
+    assert list(td) == [
+        ["-", "-"],
+        ["foo", "-"],
+        ["foo", "-"],
+        ["bar", "foobar"],
+    ]
+
+
+def test_drop_duplicates_rich_text():
+    from dvc.ui import ui
+
+    td = TabularData(["col-1", "col-2", "col-3"], fill_value="-")
+
+    td.extend(
+        [
+            ["foo", None, ui.rich_text("-")],
+            ["foo", "foo"],
+            ["foo", "foo"],
+            ["foo", "bar", "foobar"],
+        ]
+    )
+
+    assert list(td) == [
+        ["foo", "-", ui.rich_text("-")],
+        ["foo", "foo", "-"],
+        ["foo", "foo", "-"],
+        ["foo", "bar", "foobar"],
+    ]
+
+    td.drop_duplicates("cols")
+
+    assert list(td) == [["-"], ["foo"], ["foo"], ["bar"]]
 
 
 def test_dropna_invalid_axis():
@@ -264,3 +324,21 @@ def test_drop_duplicates_invalid_axis():
 
     with pytest.raises(ValueError, match="Invalid 'axis' value foo."):
         td.drop_duplicates("foo")
+
+
+def test_to_parallel_coordinates(tmp_dir, mocker):
+    (tmp_dir / "foo").mkdir()
+    td = TabularData(["categorical", "scalar"])
+    td.extend([["foo", "0.1"], ["bar", "2"]])
+
+    write = mocker.patch("dvc.render.html.write")
+    renderer_class = mocker.patch(
+        "dvc.render.plotly.ParallelCoordinatesRenderer"
+    )
+    renderer = renderer_class.return_value
+
+    td.to_parallel_coordinates(output_path="foo")
+
+    renderer_class.assert_called_with(td, None, td._fill_value)
+
+    write.assert_called_with("foo", renderers=[renderer])

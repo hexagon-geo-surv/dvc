@@ -3,7 +3,7 @@ from typing import TYPE_CHECKING, List, Optional
 
 from funcy import once_per_args
 
-from dvc.render.utils import render
+from dvc.render.utils import match_renderers, render
 
 logger = logging.getLogger(__name__)
 
@@ -20,18 +20,18 @@ def webbrowser_open(url: str) -> int:
 
 
 def create_summary(out):
-
     assert out.live and out.live["html"]
 
     metrics, plots = out.repo.live.show(out.fs_path)
 
     html_path = out.fs_path + "_dvc_plots"
 
+    renderers = match_renderers(plots, out.repo.plots.templates)
     index_path = render(
-        out.repo, plots, metrics=metrics, path=html_path, refresh_seconds=5
+        out.repo, renderers, metrics=metrics, path=html_path, refresh_seconds=5
     )
-
-    webbrowser_open(index_path)
+    if out.repo.config["plots"].get("auto_open", False):
+        webbrowser_open(index_path)
 
 
 def summary_fs_path(out: "Output") -> Optional[str]:

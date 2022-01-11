@@ -1,3 +1,4 @@
+import errno
 import logging
 import os
 import threading
@@ -176,8 +177,7 @@ class RepoFileSystem(FileSystem):  # pylint:disable=abstract-method
             if self._is_dvc_repo(d):
                 repo = self.repo_factory(
                     d,
-                    scm=self._main_repo.scm,
-                    rev=self._main_repo.get_rev(),
+                    fs=self._main_repo.fs,
                     repo_factory=self.repo_factory,
                 )
                 self._dvcfss[repo.root_dir] = DvcFileSystem(repo=repo)
@@ -475,7 +475,9 @@ class RepoFileSystem(FileSystem):  # pylint:disable=abstract-method
             info_result = fs.info(fs_path)
 
         if not info_result and not dvc_meta:
-            raise FileNotFoundError
+            raise FileNotFoundError(
+                errno.ENOENT, os.strerror(errno.ENOENT), fs_path
+            )
 
         from ._metadata import Metadata
 

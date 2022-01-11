@@ -6,7 +6,7 @@ from dvc.repo import locked
 from dvc.repo.scm_context import scm_context
 from dvc.scm import RevError
 
-from .utils import exp_refs, push_refspec, remove_exp_refs, resolve_exp_ref
+from .utils import exp_refs, push_refspec, remove_exp_refs, resolve_name
 
 logger = logging.getLogger(__name__)
 
@@ -49,16 +49,16 @@ def _clear_all(repo):
 
 def _get_exp_stash_index(repo, ref_or_rev: str) -> Optional[int]:
     stash_revs = repo.experiments.stash_revs
-    for _, ref_info in stash_revs.items():
-        if ref_info.name == ref_or_rev:
-            return ref_info.index
+    for _, entry in stash_revs.items():
+        if entry.name == ref_or_rev:
+            return entry.stash_index
 
     from dvc.scm import resolve_rev
 
     try:
         rev = resolve_rev(repo.scm, ref_or_rev)
         if rev in stash_revs:
-            return stash_revs.get(rev).index
+            return stash_revs.get(rev).stash_index
     except RevError:
         pass
     return None
@@ -69,9 +69,8 @@ def _remove_commited_exps(
 ) -> List[str]:
     remain_list = []
     remove_list = []
-    for exp_name in exp_names:
-        ref_info = resolve_exp_ref(repo.scm, exp_name, remote)
-
+    ref_info_dict = resolve_name(repo.scm, exp_names, remote)
+    for exp_name, ref_info in ref_info_dict.items():
         if ref_info:
             remove_list.append(ref_info)
         else:
