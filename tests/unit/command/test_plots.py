@@ -6,7 +6,8 @@ from pathlib import Path
 import pytest
 
 from dvc.cli import parse_args
-from dvc.command.plots import CmdPlotsDiff, CmdPlotsShow
+from dvc.command.plots import CmdPlotsDiff, CmdPlotsShow, _show_json
+from dvc.exceptions import DvcException
 
 
 @pytest.fixture
@@ -297,3 +298,16 @@ def test_plots_diff_json(dvc, mocker, capsys):
     show_json_mock.assert_called_once_with(renderers, "out")
 
     render_mock.assert_not_called()
+
+
+def test_show_json_requires_out(mocker):
+    renderer = mocker.MagicMock()
+    renderer.needs_output_path = False
+    renderer.filename = "foo"
+    renderer.as_json.return_value = "{}"
+
+    _show_json([renderer], None)
+
+    renderer.needs_output_path = True
+    with pytest.raises(DvcException):
+        _show_json([renderer], None)
