@@ -1,12 +1,14 @@
 """Manages source control systems (e.g. Git)."""
 from contextlib import contextmanager
-from typing import TYPE_CHECKING, Iterator
+from functools import partial
+from typing import TYPE_CHECKING, Iterator, List, Mapping, Optional
 
+from funcy import group_by
 from scmrepo.base import Base  # noqa: F401, pylint: disable=unused-import
 from scmrepo.git import Git
 from scmrepo.noscm import NoSCM
 
-from dvc.exceptions import DvcException
+from dvc.exceptions import DvcException, InvalidArgumentError
 from dvc.progress import Tqdm
 
 if TYPE_CHECKING:
@@ -114,12 +116,70 @@ def resolve_rev(scm: "Git", rev: str) -> str:
     except InternalRevError as exc:
         # `scm` will only resolve git branch and tag names,
         # if rev is not a sha it may be an abbreviated experiment name
-        if not scm.is_sha(rev) and not rev.startswith("refs/"):
-            from dvc.repo.experiments.utils import exp_refs_by_name
+        if not rev.startswith("refs/"):
+            from dvc.repo.experiments.utils import (
+                AmbiguousExpRefInfo,
+                resolve_name,
+            )
 
-            ref_infos = list(exp_refs_by_name(scm, rev))
-            if len(ref_infos) == 1:
-                return scm.get_ref(str(ref_infos[0]))
-            if len(ref_infos) > 1:
+            try:
+                ref_infos = resolve_name(scm, rev).get(rev)
+            except AmbiguousExpRefInfo:
                 raise RevError(f"ambiguous Git revision '{rev}'")
+            if ref_infos:
+                return scm.get_ref(str(ref_infos))
+
         raise RevError(str(exc))
+
+
+def iter_revs(
+    scm: "Git",
+    head_revs: Optional[List[str]] = None,
+    num: int = 1,
+    all_branches: bool = False,
+    all_tags: bool = False,
+    all_commits: bool = False,
+    all_experiments: bool = False,
+) -> Mapping[str, List[str]]:
+    from dvc.repo.experiments.utils import fix_exp_head
+
+    if num < 1 and num != -1:
+        raise InvalidArgumentError(f"Invalid number of commits '{num}'")
+
+    if not any(
+        [head_revs, all_branches, all_tags, all_commits, all_experiments]
+    ):
+        return {}
+
+    head_revs = head_revs or []
+    revs = []
+    for rev in head_revs:
+        revs.append(rev)
+        n = 1
+        while True:
+            if num == n:
+                break
+            try:
+                head = fix_exp_head(scm, f"{rev}~{n}")
+                assert head
+                revs.append(resolve_rev(scm, head))
+            except RevError:
+                break
+            n += 1
+
+    if all_commits:
+        revs.extend(scm.list_all_commits())
+    else:
+        if all_branches:
+            revs.extend(scm.list_branches())
+
+        if all_tags:
+            revs.extend(scm.list_tags())
+
+    if all_experiments:
+        from dvc.repo.experiments.utils import exp_commits
+
+        revs.extend(exp_commits(scm))
+
+    rev_resolver = partial(resolve_rev, scm)
+    return group_by(rev_resolver, revs)
