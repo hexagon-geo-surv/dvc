@@ -1,3 +1,6 @@
+import pytest
+
+
 def test_scm_context_autostage(tmp_dir, scm, dvc):
     tmp_dir.gen("foo", "foo")
     with dvc.scm_context(autostage=True) as context:
@@ -16,18 +19,19 @@ def test_scm_context_ignore(tmp_dir, scm, dvc):
     assert scm.is_ignored("foo")
 
 
-def test_scm_context_when_already_ignored(tmp_dir, scm, dvc):
-    scm.ignore(tmp_dir / "foo")
+@pytest.mark.parametrize("file_name", ["foo", "foo[bar]"])
+def test_scm_context_when_already_ignored(tmp_dir, scm, dvc, file_name):
+    scm.ignore(tmp_dir / file_name)
     scm._reset()
 
     with dvc.scm_context() as context:
-        context.ignore(tmp_dir / "foo")
+        context.ignore(tmp_dir / file_name)
         # If files are already ignored, dvc should not try to track a new
         # .gitignore file as it's a no-op.
         assert not context.files_to_track
 
     scm._reset()
-    assert scm.is_ignored("foo")
+    assert scm.is_ignored(file_name)
 
 
 def test_scm_context_ignore_remove(tmp_dir, scm, dvc):
