@@ -1,12 +1,20 @@
 import networkx as nx
 import pytest
 
-from dvc.cli import parse_args
-from dvc.commands.dag import CmdDAG, _build, _show_ascii, _show_dot
+from dvc.cli import main, parse_args
+from dvc.commands.dag import (
+    CmdDAG,
+    _build,
+    _show_ascii,
+    _show_dot,
+    _show_mermaid,
+)
 
 
-@pytest.mark.parametrize("fmt", [None, "--dot"])
+@pytest.mark.parametrize("fmt", [None, "--dot", "--mermaid", "--md"])
 def test_dag(tmp_dir, dvc, mocker, fmt):
+    from dvc.commands import dag
+
     tmp_dir.dvc_gen("foo", "foo")
 
     args = ["dag", "--full", "foo.dvc"]
@@ -15,11 +23,18 @@ def test_dag(tmp_dir, dvc, mocker, fmt):
     cli_args = parse_args(args)
     assert cli_args.func == CmdDAG
 
+    if fmt == "--dot":
+        fmt_func = mocker.spy(dag, "_show_dot")
+    elif fmt in {"--mermaid", "--md"}:
+        fmt_func = mocker.spy(dag, "_show_mermaid")
+
     cmd = cli_args.func(cli_args)
 
     mocker.patch("dvc.commands.dag._build", return_value=dvc.index.graph)
 
     assert cmd.run() == 0
+    if fmt:
+        assert fmt_func.called
 
 
 @pytest.fixture
@@ -131,3 +146,49 @@ def test_show_dot(repo):
         "\"stage: '4'\" -> \"stage: '3'\";\n"
         "}\n"
     )
+
+
+def test_show_mermaid(repo):
+    assert [
+        line.rstrip() for line in _show_mermaid(repo.index.graph).splitlines()
+    ] == [
+        "flowchart TD",
+        "\tnode1[stage: '1']",
+        "\tnode2[stage: '2']",
+        "\tnode3[stage: '3']",
+        "\tnode4[stage: '4']",
+        "\tnode5[stage: 'a.dvc']",
+        "\tnode6[stage: 'b.dvc']",
+        "\tnode3-->node4",
+        "\tnode5-->node1",
+        "\tnode5-->node3",
+        "\tnode5-->node4",
+        "\tnode6-->node2",
+        "\tnode6-->node3",
+    ]
+
+
+def test_show_mermaid_markdown(repo, dvc, capsys, mocker):
+    mocker.patch("dvc.commands.dag._build", return_value=dvc.index.graph)
+
+    capsys.readouterr()
+    assert main(["dag", "--md"]) == 0
+    assert [
+        line.rstrip() for line in capsys.readouterr().out.splitlines()
+    ] == [
+        "```mermaid",
+        "flowchart TD",
+        "\tnode1[stage: '1']",
+        "\tnode2[stage: '2']",
+        "\tnode3[stage: '3']",
+        "\tnode4[stage: '4']",
+        "\tnode5[stage: 'a.dvc']",
+        "\tnode6[stage: 'b.dvc']",
+        "\tnode3-->node4",
+        "\tnode5-->node1",
+        "\tnode5-->node3",
+        "\tnode5-->node4",
+        "\tnode6-->node2",
+        "\tnode6-->node3",
+        "```",
+    ]
