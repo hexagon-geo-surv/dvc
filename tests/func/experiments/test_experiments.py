@@ -10,6 +10,7 @@ from dvc.dvcfile import PIPELINE_FILE
 from dvc.exceptions import DvcException
 from dvc.repo.experiments.utils import exp_refs_by_rev
 from dvc.scm import resolve_rev
+from dvc.stage.exceptions import StageFileDoesNotExistError
 from dvc.utils.serialize import PythonFileCorruptedError
 from tests.func.test_repro_multistage import COPY_SCRIPT
 
@@ -97,7 +98,7 @@ def test_failed_exp(tmp_dir, scm, dvc, exp_stage, mocker, caplog):
 
     mocker.patch(
         "concurrent.futures.Future.exception",
-        return_value=ReproductionError(exp_stage.relpath),
+        return_value=ReproductionError(exp_stage.addressing),
     )
     with caplog.at_level(logging.ERROR):
         dvc.experiments.run(exp_stage.addressing, tmp_dir=True)
@@ -589,7 +590,7 @@ def test_queue(tmp_dir, scm, dvc, exp_stage, mocker):
 
 
 def test_run_metrics(tmp_dir, scm, dvc, exp_stage, mocker):
-    from dvc.main import main
+    from dvc.cli import main
 
     mocker.patch.object(
         dvc.experiments, "run", return_value={"abc123": "abc123"}
@@ -629,7 +630,8 @@ def test_fix_exp_head(tmp_dir, scm, tail):
     head = "HEAD" + tail
     assert head == fix_exp_head(scm, head)
 
-    scm.set_ref(EXEC_BASELINE, "refs/heads/master")
+    rev = "1" * 40
+    scm.set_ref(EXEC_BASELINE, rev)
     assert EXEC_BASELINE + tail == fix_exp_head(scm, head)
     assert "foo" + tail == fix_exp_head(scm, "foo" + tail)
 
@@ -703,3 +705,15 @@ def test_experiment_name_invalid(tmp_dir, scm, dvc, exp_stage, mocker):
             params=["foo=3"],
         )
     new_mock.assert_not_called()
+
+
+def test_experiments_workspace_not_log_exception(caplog, dvc, scm):
+    """Experiments run in workspace should not log exception.
+
+    Instead it should just leave it to be handled in the main entrypoints.
+    """
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(StageFileDoesNotExistError):
+            dvc.experiments.run()
+
+    assert not caplog.text

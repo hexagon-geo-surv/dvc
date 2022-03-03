@@ -1,26 +1,53 @@
 import logging
 import os
 from datetime import datetime
+from unittest.mock import ANY
 
 import pytest
 from funcy import first, get_in
 
+from dvc.cli import main
 from dvc.exceptions import InvalidArgumentError
-from dvc.main import main
 from dvc.repo.experiments.base import EXPS_STASH, ExpRefInfo
-from dvc.repo.experiments.executor.base import BaseExecutor, ExecutorInfo
+from dvc.repo.experiments.executor.base import (
+    EXEC_PID_DIR,
+    EXEC_TMP_DIR,
+    BaseExecutor,
+    ExecutorInfo,
+)
 from dvc.repo.experiments.utils import exp_refs_by_rev
 from dvc.utils.fs import makedirs
 from dvc.utils.serialize import YAMLFileCorruptedError
 from tests.func.test_repro_multistage import COPY_SCRIPT
-from tests.utils import console_width
+
+
+def make_executor_info(**kwargs):
+    # set default values for required info fields
+    for key in (
+        "git_url",
+        "baseline_rev",
+        "location",
+        "root_dir",
+        "dvc_dir",
+    ):
+        if key not in kwargs:
+            kwargs[key] = ""
+    return ExecutorInfo(**kwargs)
 
 
 def test_show_simple(tmp_dir, scm, dvc, exp_stage):
     assert dvc.experiments.show()["workspace"] == {
         "baseline": {
             "data": {
+                "deps": {
+                    "copy.py": {
+                        "hash": ANY,
+                        "size": ANY,
+                        "nfiles": None,
+                    }
+                },
                 "metrics": {"metrics.yaml": {"data": {"foo": 1}}},
+                "outs": {},
                 "params": {"params.yaml": {"data": {"foo": 1}}},
                 "queued": False,
                 "running": False,
@@ -45,7 +72,15 @@ def test_show_experiment(tmp_dir, scm, dvc, exp_stage, workspace):
 
     expected_baseline = {
         "data": {
+            "deps": {
+                "copy.py": {
+                    "hash": ANY,
+                    "size": ANY,
+                    "nfiles": None,
+                }
+            },
             "metrics": {"metrics.yaml": {"data": {"foo": 1}}},
+            "outs": {},
             "params": {"params.yaml": {"data": {"foo": 1}}},
             "queued": False,
             "running": False,
@@ -174,107 +209,13 @@ def test_show_checkpoint_branch(
     assert f"({branch_rev[:7]})" in cap.out
 
 
-@pytest.mark.parametrize(
-    "i_metrics,i_params,e_metrics,e_params,included,excluded",
-    [
-        (
-            "foo",
-            "foo",
-            None,
-            None,
-            ["foo"],
-            ["bar", "train/foo", "nested.foo"],
-        ),
-        (
-            None,
-            None,
-            "foo",
-            "foo",
-            ["bar", "train/foo", "nested.foo"],
-            ["foo"],
-        ),
-        (
-            "foo,bar",
-            "foo,bar",
-            None,
-            None,
-            ["foo", "bar"],
-            ["train/foo", "train/bar", "nested.foo", "nested.bar"],
-        ),
-        (
-            "metrics.yaml:foo,bar",
-            "params.yaml:foo,bar",
-            None,
-            None,
-            ["foo", "bar"],
-            ["train/foo", "train/bar", "nested.foo", "nested.bar"],
-        ),
-        (
-            "train/*",
-            "train/*",
-            None,
-            None,
-            ["train/foo", "train/bar"],
-            ["foo", "bar", "nested.foo", "nested.bar"],
-        ),
-        (
-            None,
-            None,
-            "train/*",
-            "train/*",
-            ["foo", "bar", "nested.foo", "nested.bar"],
-            ["train/foo", "train/bar"],
-        ),
-        (
-            "train/*",
-            "train/*",
-            "*foo",
-            "*foo",
-            ["train/bar"],
-            ["train/foo", "foo", "bar", "nested.foo", "nested.bar"],
-        ),
-        (
-            "nested.*",
-            "nested.*",
-            None,
-            None,
-            ["nested.foo", "nested.bar"],
-            ["foo", "bar", "train/foo", "train/bar"],
-        ),
-        (
-            None,
-            None,
-            "nested.*",
-            "nested.*",
-            ["foo", "bar", "train/foo", "train/bar"],
-            ["nested.foo", "nested.bar"],
-        ),
-        (
-            "*.*",
-            "*.*",
-            "*.bar",
-            "*.bar",
-            ["nested.foo"],
-            ["foo", "bar", "nested.bar", "train/foo", "train/bar"],
-        ),
-    ],
-)
 def test_show_filter(
     tmp_dir,
     scm,
     dvc,
     capsys,
-    i_metrics,
-    i_params,
-    e_metrics,
-    e_params,
-    included,
-    excluded,
 ):
-    from dvc.ui import ui
-
     capsys.readouterr()
-    div = "│" if os.name == "nt" else "┃"
 
     tmp_dir.gen("copy.py", COPY_SCRIPT)
     params_file = tmp_dir / "params.yaml"
@@ -306,26 +247,39 @@ def test_show_filter(
     )
     scm.commit("init")
 
-    command = ["exp", "show", "--no-pager", "--no-timestamp"]
-    if i_metrics is not None:
-        command.append(f"--include-metrics={i_metrics}")
-    if i_params is not None:
-        command.append(f"--include-params={i_params}")
-    if e_metrics is not None:
-        command.append(f"--exclude-metrics={e_metrics}")
-    if e_params is not None:
-        command.append(f"--exclude-params={e_params}")
-
-    with console_width(ui.rich_console, 255):
-        assert main(command) == 0
+    capsys.readouterr()
+    assert main(["exp", "show", "--drop=.*foo"]) == 0
     cap = capsys.readouterr()
+    for filtered in ["foo", "train/foo", "nested.foo"]:
+        assert f"params.yaml:{filtered}" not in cap.out
+        assert f"metrics.yaml:{filtered}" not in cap.out
 
-    for i in included:
-        assert f"{div} params.yaml:{i} {div}" in cap.out
-        assert f"{div} metrics.yaml:{i} {div}" in cap.out
-    for e in excluded:
-        assert f"{div} params.yaml:{e} {div}" not in cap.out
-        assert f"{div} metrics.yaml:{e} {div}" not in cap.out
+    capsys.readouterr()
+    assert main(["exp", "show", "--drop=.*foo", "--keep=.*train"]) == 0
+    cap = capsys.readouterr()
+    for filtered in ["foo", "nested.foo"]:
+        assert f"params.yaml:{filtered}" not in cap.out
+        assert f"metrics.yaml:{filtered}" not in cap.out
+    assert "params.yaml:train/foo" in cap.out
+    assert "metrics.yaml:train/foo" in cap.out
+
+    capsys.readouterr()
+    assert main(["exp", "show", "--drop=params.yaml:.*foo"]) == 0
+    cap = capsys.readouterr()
+    for filtered in ["foo", "train/foo", "nested.foo"]:
+        assert f"params.yaml:{filtered}" not in cap.out
+        assert f"metrics.yaml:{filtered}" in cap.out
+
+    capsys.readouterr()
+    assert main(["exp", "show", "--drop=Created"]) == 0
+    cap = capsys.readouterr()
+    assert "Created" not in cap.out
+
+    capsys.readouterr()
+    assert main(["exp", "show", "--drop=Created|Experiment"]) == 0
+    cap = capsys.readouterr()
+    assert "Created" not in cap.out
+    assert "Experiment" not in cap.out
 
 
 def test_show_multiple_commits(tmp_dir, scm, dvc, exp_stage):
@@ -333,8 +287,9 @@ def test_show_multiple_commits(tmp_dir, scm, dvc, exp_stage):
     tmp_dir.scm_gen("file", "file", "commit")
     next_rev = scm.get_rev()
 
+    dvc.experiments.show(num=-1)
     with pytest.raises(InvalidArgumentError):
-        dvc.experiments.show(num=-1)
+        dvc.experiments.show(num=-2)
 
     expected = {"workspace", init_rev, next_rev}
     results = dvc.experiments.show(num=2)
@@ -367,17 +322,29 @@ def test_show_sort(tmp_dir, scm, dvc, exp_stage, caplog):
 
 
 def test_show_running_workspace(tmp_dir, scm, dvc, exp_stage, capsys):
-    pid_dir = os.path.join(dvc.tmp_dir, dvc.experiments.EXEC_PID_DIR)
-    makedirs(pid_dir, True)
-    info = ExecutorInfo(None, None, None, BaseExecutor.DEFAULT_LOCATION)
-    pidfile = os.path.join(pid_dir, f"workspace{BaseExecutor.PIDFILE_EXT}")
-    (tmp_dir / pidfile).dump(info.to_dict())
+    pid_dir = os.path.join(dvc.tmp_dir, EXEC_TMP_DIR, EXEC_PID_DIR)
+    info = make_executor_info(location=BaseExecutor.DEFAULT_LOCATION)
+    pidfile = os.path.join(
+        pid_dir,
+        "workspace",
+        f"workspace{BaseExecutor.INFOFILE_EXT}",
+    )
+    makedirs(os.path.dirname(pidfile), True)
+    (tmp_dir / pidfile).dump_json(info.asdict())
 
     assert dvc.experiments.show()["workspace"] == {
         "baseline": {
             "data": {
+                "deps": {
+                    "copy.py": {
+                        "hash": ANY,
+                        "size": ANY,
+                        "nfiles": None,
+                    }
+                },
                 "metrics": {"metrics.yaml": {"data": {"foo": 1}}},
                 "params": {"params.yaml": {"data": {"foo": 1}}},
+                "outs": {},
                 "queued": False,
                 "running": True,
                 "executor": info.location,
@@ -387,7 +354,7 @@ def test_show_running_workspace(tmp_dir, scm, dvc, exp_stage, capsys):
     }
 
     capsys.readouterr()
-    assert main(["exp", "show", "--no-pager"]) == 0
+    assert main(["exp", "show", "--csv"]) == 0
     cap = capsys.readouterr()
     assert "Running" in cap.out
     assert info.location in cap.out
@@ -398,11 +365,15 @@ def test_show_running_executor(tmp_dir, scm, dvc, exp_stage):
     dvc.experiments.run(exp_stage.addressing, params=["foo=2"], queue=True)
     exp_rev = dvc.experiments.scm.resolve_rev(f"{EXPS_STASH}@{{0}}")
 
-    pid_dir = os.path.join(dvc.tmp_dir, dvc.experiments.EXEC_PID_DIR)
-    makedirs(pid_dir, True)
-    info = ExecutorInfo(None, None, None, BaseExecutor.DEFAULT_LOCATION)
-    pidfile = os.path.join(pid_dir, f"{exp_rev}{BaseExecutor.PIDFILE_EXT}")
-    (tmp_dir / pidfile).dump(info.to_dict())
+    pid_dir = os.path.join(dvc.tmp_dir, EXEC_TMP_DIR, EXEC_PID_DIR)
+    info = make_executor_info(location=BaseExecutor.DEFAULT_LOCATION)
+    pidfile = os.path.join(
+        pid_dir,
+        exp_rev,
+        f"{exp_rev}{BaseExecutor.INFOFILE_EXT}",
+    )
+    makedirs(os.path.dirname(pidfile), True)
+    (tmp_dir / pidfile).dump_json(info.asdict())
 
     results = dvc.experiments.show()
     exp_data = get_in(results, [baseline_rev, exp_rev, "data"])
@@ -417,7 +388,7 @@ def test_show_running_executor(tmp_dir, scm, dvc, exp_stage):
 def test_show_running_checkpoint(
     tmp_dir, scm, dvc, checkpoint_stage, workspace, mocker
 ):
-    from dvc.repo.experiments.base import EXEC_BRANCH
+    from dvc.repo.experiments.base import EXEC_BASELINE, EXEC_BRANCH
     from dvc.repo.experiments.executor.local import TempDirExecutor
 
     baseline_rev = scm.get_rev()
@@ -430,23 +401,29 @@ def test_show_running_checkpoint(
     checkpoint_rev = first(run_results)
     exp_ref = first(exp_refs_by_rev(scm, checkpoint_rev))
 
-    pid_dir = os.path.join(dvc.tmp_dir, dvc.experiments.EXEC_PID_DIR)
-    makedirs(pid_dir, True)
+    pid_dir = os.path.join(dvc.tmp_dir, EXEC_TMP_DIR, EXEC_PID_DIR)
     executor = (
         BaseExecutor.DEFAULT_LOCATION
         if workspace
         else TempDirExecutor.DEFAULT_LOCATION
     )
-    info = ExecutorInfo(123, "foo.git", baseline_rev, executor)
+    info = make_executor_info(
+        git_url="foo.git",
+        baseline_rev=baseline_rev,
+        location=executor,
+    )
     rev = "workspace" if workspace else stash_rev
-    pidfile = os.path.join(pid_dir, f"{rev}{BaseExecutor.PIDFILE_EXT}")
-    (tmp_dir / pidfile).dump(info.to_dict())
+    pidfile = os.path.join(pid_dir, f"{rev}{BaseExecutor.INFOFILE_EXT}")
+    makedirs(os.path.dirname(pidfile), True)
+    (tmp_dir / pidfile).dump_json(info.asdict())
 
     mocker.patch.object(
         BaseExecutor, "fetch_exps", return_value=[str(exp_ref)]
     )
     if workspace:
         scm.set_ref(EXEC_BRANCH, str(exp_ref), symbolic=True)
+        scm.set_ref(EXEC_BASELINE, str(baseline_rev))
+        scm.checkout(str(exp_ref))
 
     results = dvc.experiments.show()
 
@@ -500,26 +477,26 @@ def test_show_csv(tmp_dir, scm, dvc, exp_stage, capsys):
     capsys.readouterr()
     assert main(["exp", "show", "--csv"]) == 0
     cap = capsys.readouterr()
+    data_dep = first(x for x in dvc.index.deps if "copy.py" in x.fspath)
+    data_hash = data_dep.hash_info.value[:7]
+    assert "Experiment,rev,typ,Created,parent" in cap.out
+    assert "metrics.yaml:foo,params.yaml:foo,copy.py" in cap.out
+    assert f",workspace,baseline,,,3,3,{data_hash}" in cap.out
     assert (
-        "Experiment,rev,typ,Created,parent,metrics.yaml:foo,params.yaml:foo"
-        in cap.out
-    )
-    assert ",workspace,baseline,,,3,3" in cap.out
-    assert (
-        "master,{},baseline,{},,1,1".format(
-            baseline_rev[:7], _get_rev_isotimestamp(baseline_rev)
+        "master,{},baseline,{},,1,1,{}".format(
+            baseline_rev[:7], _get_rev_isotimestamp(baseline_rev), data_hash
         )
         in cap.out
     )
     assert (
-        "{},{},branch_base,{},,2,2".format(
-            ref_info1.name, rev1[:7], _get_rev_isotimestamp(rev1)
+        "{},{},branch_base,{},,2,2,{}".format(
+            ref_info1.name, rev1[:7], _get_rev_isotimestamp(rev1), data_hash
         )
         in cap.out
     )
     assert (
-        "{},{},branch_commit,{},,3,3".format(
-            ref_info2.name, rev2[:7], _get_rev_isotimestamp(rev2)
+        "{},{},branch_commit,{},,3,3,{}".format(
+            ref_info2.name, rev2[:7], _get_rev_isotimestamp(rev2), data_hash
         )
         in cap.out
     )
@@ -558,12 +535,209 @@ def test_show_only_changed(tmp_dir, dvc, scm, capsys):
     capsys.readouterr()
     assert main(["exp", "show"]) == 0
     cap = capsys.readouterr()
-
-    print(cap)
     assert "bar" in cap.out
 
     capsys.readouterr()
     assert main(["exp", "show", "--only-changed"]) == 0
     cap = capsys.readouterr()
-
     assert "bar" not in cap.out
+
+    capsys.readouterr()
+    assert main(["exp", "show", "--only-changed", "--keep=.*bar"]) == 0
+    cap = capsys.readouterr()
+    assert "params.yaml:bar" in cap.out
+    assert "metrics.yaml:bar" in cap.out
+
+
+def test_show_parallel_coordinates(tmp_dir, dvc, scm, mocker, capsys):
+    from dvc.commands.experiments import show
+
+    webbroser_open = mocker.patch("webbrowser.open")
+    show_experiments = mocker.spy(show, "show_experiments")
+
+    tmp_dir.gen("copy.py", COPY_SCRIPT)
+    params_file = tmp_dir / "params.yaml"
+    params_data = {
+        "foo": 1,
+        "bar": 1,
+    }
+    (tmp_dir / params_file).dump(params_data)
+
+    dvc.run(
+        cmd="python copy.py params.yaml metrics.yaml",
+        metrics_no_cache=["metrics.yaml"],
+        params=["foo", "bar"],
+        name="copy-file",
+        deps=["copy.py"],
+    )
+    scm.add(
+        [
+            "dvc.yaml",
+            "dvc.lock",
+            "copy.py",
+            "params.yaml",
+            "metrics.yaml",
+            ".gitignore",
+        ]
+    )
+    scm.commit("init")
+
+    dvc.experiments.run(params=["foo=2"])
+
+    assert main(["exp", "show", "--pcp"]) == 0
+    kwargs = show_experiments.call_args[1]
+
+    html_text = (tmp_dir / "dvc_plots" / "index.html").read_text()
+    assert all(rev in html_text for rev in ["workspace", "master"])
+    assert "[exp-" not in html_text
+
+    assert '{"label": "metrics.yaml:foo", "values": [2.0, 1.0]}' in html_text
+    assert '{"label": "params.yaml:foo", "values": [2.0, 1.0]}' in html_text
+    assert '"line": {"color": [1, 0]' in html_text
+    assert '"label": "metrics.yaml:bar"' not in html_text
+    assert '"label": "Created"' not in html_text
+
+    assert main(["exp", "show", "--pcp", "--sort-by", "metrics.yaml:foo"]) == 0
+    kwargs = show_experiments.call_args[1]
+
+    html_text = (tmp_dir / "dvc_plots" / "index.html").read_text()
+    assert '"line": {"color": [2.0, 1.0]' in html_text
+
+    assert main(["exp", "show", "--pcp", "--out", "experiments"]) == 0
+    kwargs = show_experiments.call_args[1]
+
+    assert kwargs["out"] == "experiments"
+    assert (tmp_dir / "experiments" / "index.html").exists()
+
+    assert main(["exp", "show", "--pcp", "--open"]) == 0
+
+    webbroser_open.assert_called()
+
+    params_data = {"foo": 1, "bar": 1, "foobar": 2}
+    (tmp_dir / params_file).dump(params_data)
+    assert main(["exp", "show", "--pcp"]) == 0
+    html_text = (tmp_dir / "dvc_plots" / "index.html").read_text()
+    assert '{"label": "foobar", "values": [2.0, null, null]}' in html_text
+
+    assert main(["exp", "show", "--pcp", "--drop", "foobar"]) == 0
+    html_text = (tmp_dir / "dvc_plots" / "index.html").read_text()
+    assert '"label": "Created"' not in html_text
+    assert '"label": "foobar"' not in html_text
+
+
+def test_show_outs(tmp_dir, dvc, scm):
+    tmp_dir.gen("copy.py", COPY_SCRIPT)
+    params_file = tmp_dir / "params.yaml"
+    params_data = {
+        "foo": 1,
+        "bar": 1,
+    }
+    (tmp_dir / params_file).dump(params_data)
+
+    dvc.run(
+        cmd="python copy.py params.yaml metrics.yaml && echo out > out",
+        metrics_no_cache=["metrics.yaml"],
+        params=["foo", "bar"],
+        name="copy-file",
+        deps=["copy.py"],
+        outs=["out"],
+    )
+
+    scm.commit("init")
+
+    outs = dvc.experiments.show()["workspace"]["baseline"]["data"]["outs"]
+    assert outs == {
+        "out": {
+            "hash": ANY,
+            "size": ANY,
+            "nfiles": None,
+        }
+    }
+
+
+def test_metrics_renaming(tmp_dir, dvc, scm, capsys):
+    tmp_dir.gen("copy.py", COPY_SCRIPT)
+    params_file = tmp_dir / "params.yaml"
+    params_data = {
+        "foo": 1,
+    }
+    (tmp_dir / params_file).dump(params_data)
+
+    dvc.run(
+        cmd="python copy.py params.yaml metrics.yaml",
+        metrics_no_cache=["metrics.yaml"],
+        params=["foo"],
+        name="copy-file",
+        deps=["copy.py"],
+    )
+    scm.add(
+        [
+            "dvc.yaml",
+            "dvc.lock",
+            "copy.py",
+            "params.yaml",
+            "metrics.yaml",
+            ".gitignore",
+        ]
+    )
+
+    scm.commit("metrics.yaml")
+    metrics_rev = scm.get_rev()
+
+    dvc.run(
+        cmd="python copy.py params.yaml scores.yaml",
+        metrics_no_cache=["scores.yaml"],
+        params=["foo"],
+        name="copy-file",
+        deps=["copy.py"],
+    )
+    scm.add(
+        [
+            "dvc.yaml",
+            "dvc.lock",
+            "params.yaml",
+            "scores.yaml",
+        ]
+    )
+    scm.commit("scores.yaml")
+    scores_rev = scm.get_rev()
+
+    capsys.readouterr()
+    assert main(["exp", "show", "--csv", "-A"]) == 0
+    cap = capsys.readouterr()
+
+    def _get_rev_isotimestamp(rev):
+        return datetime.fromtimestamp(
+            scm.gitpython.repo.rev_parse(rev).committed_date
+        ).isoformat()
+
+    assert (
+        "master,{},baseline,{},,1,,1".format(
+            scores_rev[:7], _get_rev_isotimestamp(scores_rev)
+        )
+        in cap.out
+    )
+    assert (
+        ",{},baseline,{},,,1,1".format(
+            metrics_rev[:7], _get_rev_isotimestamp(metrics_rev)
+        )
+        in cap.out
+    )
+
+
+def test_show_sorted_deps(tmp_dir, dvc, scm, capsys):
+    tmp_dir.gen("a", "a")
+    tmp_dir.gen("b", "b")
+    tmp_dir.gen("c", "c")
+    tmp_dir.gen("z", "z")
+
+    dvc.run(
+        cmd="echo foo",
+        name="deps",
+        deps=["a", "b", "z", "c"],
+    )
+
+    capsys.readouterr()
+    assert main(["exp", "show", "--csv"]) == 0
+    cap = capsys.readouterr()
+    assert "a,b,c,z" in cap.out

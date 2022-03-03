@@ -94,7 +94,7 @@ class Config(dict):
             try:
                 from dvc.repo import Repo
 
-                self.dvc_dir = os.path.join(Repo.find_dvc_dir())
+                self.dvc_dir = Repo.find_dvc_dir()
             except NotDvcRepoError:
                 self.dvc_dir = None
         else:
@@ -266,7 +266,12 @@ class Config(dict):
                     "key_path": func,
                 }
             },
-            "machine": {str: {"startup_script": func}},
+            "machine": {
+                str: {
+                    "startup_script": func,
+                    "setup_script": func,
+                }
+            },
         }
         return Schema(dirs_schema, extra=ALLOW_EXTRA)(conf)
 

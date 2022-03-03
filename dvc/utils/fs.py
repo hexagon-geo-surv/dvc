@@ -16,7 +16,7 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-LOCAL_CHUNK_SIZE = 2 ** 20  # 1 MB
+LOCAL_CHUNK_SIZE = 2**20  # 1 MB
 
 umask = os.umask(0)
 os.umask(umask)
@@ -200,7 +200,7 @@ def copyfile(src, dest, callback=None, no_progress_bar=False, name=None):
     try:
         System.reflink(src, dest)
     except OSError:
-        from dvc.progress import tdqm_or_callback_wrapped
+        from dvc.fs._callback import tdqm_or_callback_wrapped
 
         with open(src, "rb") as fsrc, open(dest, "wb+") as fdest:
             with tdqm_or_callback_wrapped(

@@ -4,9 +4,9 @@ from unittest import mock
 
 import pytest
 
+from dvc.data.stage import stage
 from dvc.fs.repo import RepoFileSystem
 from dvc.hash_info import HashInfo
-from dvc.objects.stage import stage
 from tests.utils import clean_staging
 
 
@@ -291,26 +291,19 @@ def test_walk_mixed_dir(tmp_dir, scm, dvc):
     assert len(actual) == len(expected)
 
 
-def test_walk_onerror(tmp_dir, dvc):
-    def onerror(exc):
-        raise exc
+def test_walk_missing(tmp_dir, dvc):
+    fs = RepoFileSystem(repo=dvc)
 
+    for _ in fs.walk("dir"):
+        pass
+
+
+def test_walk_not_a_dir(tmp_dir, dvc):
     tmp_dir.dvc_gen("foo", "foo")
     fs = RepoFileSystem(repo=dvc)
 
-    # path does not exist
-    for _ in fs.walk("dir"):
-        pass
-    with pytest.raises(OSError):
-        for _ in fs.walk("dir", onerror=onerror):
-            pass
-
-    # path is not a directory
     for _ in fs.walk("foo"):
         pass
-    with pytest.raises(OSError):
-        for _ in fs.walk("foo", onerror=onerror):
-            pass
 
 
 def test_isdvc(tmp_dir, dvc):
@@ -321,7 +314,7 @@ def test_isdvc(tmp_dir, dvc):
     assert fs.isdvc("foo")
     assert not fs.isdvc("bar")
     assert fs.isdvc("dir")
-    assert not fs.isdvc(os.path.join("dir", "baz"))
+    assert fs.isdvc(os.path.join("dir", "baz"))
     assert fs.isdvc(os.path.join("dir", "baz"), recursive=True)
 
 
@@ -491,7 +484,7 @@ def test_repo_fs_no_subrepos(tmp_dir, dvc, scm):
     ]
 
     actual = []
-    for root, dirs, files in fs.walk(tmp_dir, dvcfiles=True):
+    for root, dirs, files in fs.walk(tmp_dir.fs_path, dvcfiles=True):
         for entry in dirs + files:
             actual.append(os.path.normpath(os.path.join(root, entry)))
 
@@ -584,9 +577,9 @@ def test_get_hash_mixed_dir(tmp_dir, scm, dvc):
 
 
 def test_get_hash_dirty_file(tmp_dir, dvc):
-    from dvc.objects import check
+    from dvc.data import check
+    from dvc.data.stage import get_file_hash
     from dvc.objects.errors import ObjectFormatError
-    from dvc.objects.stage import get_file_hash
 
     tmp_dir.dvc_gen("file", "file")
     file_hash_info = HashInfo("md5", "8c7dd922ad47494fc02c388e12c00eac")

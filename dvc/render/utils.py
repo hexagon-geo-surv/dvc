@@ -4,13 +4,9 @@ from typing import Dict, List
 import dpath.util
 
 
-def get_files(data: Dict) -> List:
-    files = set()
-    for rev in data.keys():
-        for file in data[rev].get("data", {}).keys():
-            files.add(file)
-    sorted_files = sorted(files)
-    return sorted_files
+def get_files(plots_data: Dict) -> List:
+    values = dpath.util.values(plots_data, ["*", "*"])
+    return sorted({key for submap in values for key in submap.keys()})
 
 
 def group_by_filename(plots_data: Dict) -> List[Dict]:
@@ -21,36 +17,41 @@ def group_by_filename(plots_data: Dict) -> List[Dict]:
     return grouped
 
 
-def find_vega(repo, plots_data, target):
-    found = dpath.util.search(plots_data, ["*", "*", target])
-    from dvc.render.vega import VegaRenderer
-
-    if found and VegaRenderer.matches(found):
-        return VegaRenderer(found, repo.plots.templates).as_json()
-    return ""
+def squash_plots_properties(data: Dict) -> Dict:
+    resolved: Dict[str, str] = {}
+    for rev_data in data.values():
+        for file_data in rev_data.get("data", {}).values():
+            props = file_data.get("props", {})
+            resolved = {**resolved, **props}
+    return resolved
 
 
 def match_renderers(plots_data, templates):
     from dvc.render import RENDERERS
 
     renderers = []
-    for g in group_by_filename(plots_data):
+    for group in group_by_filename(plots_data):
+        plot_properties = squash_plots_properties(group)
+        template = templates.load(plot_properties.get("template", None))
+
         for renderer_class in RENDERERS:
-            if renderer_class.matches(g):
-                renderers.append(renderer_class(g, templates))
+            if renderer_class.matches(group):
+                renderers.append(
+                    renderer_class(
+                        group, template=template, properties=plot_properties
+                    )
+                )
     return renderers
 
 
 def render(
     repo,
-    plots_data,
+    renderers,
     metrics=None,
     path=None,
     html_template_path=None,
     refresh_seconds=None,
 ):
-    # TODO we could probably remove repo usages (here and in VegaRenderer)
-    renderers = match_renderers(plots_data, repo.plots.templates)
     if not html_template_path:
         html_template_path = repo.config.get("plots", {}).get(
             "html_template", None

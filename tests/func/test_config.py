@@ -3,8 +3,8 @@ import textwrap
 
 import pytest
 
+from dvc.cli import main
 from dvc.config import Config, ConfigError
-from dvc.main import main
 
 
 def test_config_set(tmp_dir, dvc):
@@ -239,6 +239,7 @@ def test_merging_two_levels(dvc):
     assert dvc.config["remote"]["test"] == {
         "url": "ssh://example.com",
         "password": "1",
+        "verify": False,
     }
 
 

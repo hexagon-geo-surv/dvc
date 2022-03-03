@@ -10,20 +10,12 @@ from funcy import cached_property
 from tqdm.utils import CallbackIOWrapper
 
 from dvc.exceptions import DvcException
-from dvc.progress import DEFAULT_CALLBACK, FsspecCallback
+from dvc.fs._callback import DEFAULT_CALLBACK, FsspecCallback
 from dvc.ui import ui
 from dvc.utils import tmp_fname
 from dvc.utils.fs import makedirs, move
 
 logger = logging.getLogger(__name__)
-
-
-class RemoteCmdError(DvcException):
-    def __init__(self, remote, cmd, ret, err):
-        super().__init__(
-            "{remote} command '{cmd}' finished with non-zero return code"
-            " {ret}': {err}".format(remote=remote, cmd=cmd, ret=ret, err=err)
-        )
 
 
 class RemoteActionNotImplemented(DvcException):
@@ -158,17 +150,11 @@ class FileSystem:
         """
         return True
 
-    def isexec(self, path):
-        """Optional: Overwrite only if the remote has a way to distinguish
-        between executable and non-executable file.
-        """
-        return False
-
     def iscopy(self, path):
         """Check if this file is an independent copy."""
         return False  # We can't be sure by default
 
-    def walk(self, top, topdown=True, onerror=None, **kwargs):
+    def walk(self, top, topdown=True, **kwargs):
         """Return a generator with (root, dirs, files)."""
         raise NotImplementedError
 

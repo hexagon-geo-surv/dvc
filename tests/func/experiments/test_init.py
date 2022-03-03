@@ -3,16 +3,16 @@ import os
 
 import pytest
 
-from dvc.command.experiments.init import CmdExperimentsInit
-from dvc.exceptions import DvcException
-from dvc.main import main
+from dvc.cli import main
+from dvc.commands.experiments.init import CmdExperimentsInit
 from dvc.repo.experiments.init import init
 from dvc.stage.exceptions import DuplicateStageName
 
 # the tests may hang on prompts on failure
-pytestmark = pytest.mark.timeout(2, func_only=True)
+pytestmark = pytest.mark.timeout(3, func_only=True)
 
 
+@pytest.mark.timeout(5, func_only=True)
 def test_init_simple(tmp_dir, scm, dvc, capsys):
     tmp_dir.gen(
         {
@@ -43,6 +43,8 @@ def test_init_simple(tmp_dir, scm, dvc, capsys):
             }
         }
     }
+    assert (tmp_dir / "data").read_text() == "data"
+    assert (tmp_dir / "src").is_dir()
 
 
 @pytest.mark.parametrize("interactive", [True, False])
@@ -92,21 +94,6 @@ def test_init_with_no_defaults_non_interactive(tmp_dir, scm, dvc):
     assert scm.is_tracked("dvc.yaml")
 
 
-def test_abort_confirmation(tmp_dir, dvc):
-    (tmp_dir / "param").dump({"foo": 1})
-    inp = io.StringIO("./script\nscript\ndata\nmodel\nparam\nmetric\nplt\nn")
-    with pytest.raises(DvcException) as exc:
-        init(
-            dvc,
-            interactive=True,
-            defaults=CmdExperimentsInit.DEFAULTS,
-            stream=inp,
-        )
-    assert str(exc.value) == "Aborting ..."
-    assert not (tmp_dir / "dvc.yaml").exists()
-    assert not (tmp_dir / "dvc.lock").exists()
-
-
 @pytest.mark.parametrize(
     "extra_overrides, inp",
     [
@@ -141,6 +128,8 @@ def test_init_interactive_when_no_path_prompts_need_to_be_asked(
             }
         }
     }
+    assert (tmp_dir / "src").is_dir()
+    assert (tmp_dir / "data").is_dir()
 
 
 def test_when_params_is_omitted_in_interactive_mode(tmp_dir, scm, dvc):
@@ -163,6 +152,8 @@ def test_when_params_is_omitted_in_interactive_mode(tmp_dir, scm, dvc):
         }
     }
     assert not (tmp_dir / "dvc.lock").exists()
+    assert (tmp_dir / "script.py").read_text() == ""
+    assert (tmp_dir / "data").is_dir()
     scm._reset()
     assert scm.is_tracked("dvc.yaml")
     assert not scm.is_tracked("params.yaml")
@@ -193,6 +184,8 @@ def test_init_interactive_params_validation(tmp_dir, dvc, capsys):
             }
         }
     }
+    assert (tmp_dir / "script.py").read_text() == ""
+    assert (tmp_dir / "data").is_dir()
 
     out, err = capsys.readouterr()
     assert (
@@ -204,19 +197,11 @@ def test_init_interactive_params_validation(tmp_dir, dvc, capsys):
         "Please retry with an existing parameters file.\n"
         "Path to a parameters file [params.yaml, n to omit]:"
     ) in err
-    assert not out
+    assert "Created script.py." in out
 
 
 def test_init_with_no_defaults_interactive(tmp_dir, dvc):
-    inp = io.StringIO(
-        "python script.py\n"
-        "script.py\n"
-        "data\n"
-        "model\n"
-        "n\n"
-        "metric\n"
-        "n\n"
-    )
+    inp = io.StringIO("script.py\n" "data\n" "model\n" "n\n" "metric\n" "n\n")
     init(
         dvc,
         defaults={},
@@ -228,12 +213,14 @@ def test_init_with_no_defaults_interactive(tmp_dir, dvc):
         "stages": {
             "train": {
                 "cmd": "python script.py",
-                "deps": ["python script.py", "script.py"],
+                "deps": ["data", "script.py"],
                 "metrics": [{"metric": {"cache": False}}],
-                "outs": ["data"],
+                "outs": ["model"],
             }
         }
     }
+    assert (tmp_dir / "script.py").read_text() == ""
+    assert (tmp_dir / "data").is_dir()
 
 
 @pytest.mark.parametrize(
@@ -257,9 +244,7 @@ def test_init_with_no_defaults_interactive(tmp_dir, dvc):
     ],
     ids=["non-interactive", "interactive"],
 )
-def test_init_interactive_default(
-    tmp_dir, scm, dvc, interactive, overrides, inp, capsys
-):
+def test_init_default(tmp_dir, scm, dvc, interactive, overrides, inp, capsys):
     (tmp_dir / "params.yaml").dump({"foo": {"bar": 1}})
 
     init(
@@ -283,6 +268,8 @@ def test_init_interactive_default(
         }
     }
     assert not (tmp_dir / "dvc.lock").exists()
+    assert (tmp_dir / "script.py").read_text() == ""
+    assert (tmp_dir / "data").is_dir()
     scm._reset()
     assert scm.is_tracked("dvc.yaml")
     assert scm.is_tracked("params.yaml")
@@ -291,11 +278,13 @@ def test_init_interactive_default(
     out, err = capsys.readouterr()
 
     if interactive:
-        assert "'script.py' does not exist in the workspace." in err
-        assert "'data' does not exist in the workspace." in err
-    assert not out
+        assert "'script.py' does not exist, the file will be created." in err
+        assert "'data' does not exist, the directory will be created." in err
+    assert "Using experiment project structure: " in out
+    assert "Created script.py and data" in out
 
 
+@pytest.mark.timeout(5, func_only=True)
 @pytest.mark.parametrize(
     "interactive, overrides, inp",
     [
@@ -363,6 +352,8 @@ def test_init_interactive_live(
         }
     }
     assert not (tmp_dir / "dvc.lock").exists()
+    assert (tmp_dir / "script.py").read_text() == ""
+    assert (tmp_dir / "data").is_dir()
     scm._reset()
     assert scm.is_tracked("dvc.yaml")
     assert scm.is_tracked("params.yaml")
@@ -370,10 +361,12 @@ def test_init_interactive_live(
     assert scm.is_ignored("models")
 
     out, err = capsys.readouterr()
+
     if interactive:
-        assert "'script.py' does not exist in the workspace." in err
-        assert "'data' does not exist in the workspace." in err
-    assert not out
+        assert "'script.py' does not exist, the file will be created." in err
+        assert "'data' does not exist, the directory will be created." in err
+    assert "Using experiment project structure: " in out
+    assert "Created script.py and data" in out
 
 
 @pytest.mark.parametrize(
@@ -408,6 +401,8 @@ def test_init_with_type_live_and_models_plots_provided(
             }
         }
     }
+    assert (tmp_dir / "src").is_dir()
+    assert (tmp_dir / "data").is_dir()
 
 
 @pytest.mark.parametrize(
@@ -441,3 +436,5 @@ def test_init_with_type_default_and_live_provided(
             }
         }
     }
+    assert (tmp_dir / "src").is_dir()
+    assert (tmp_dir / "data").is_dir()

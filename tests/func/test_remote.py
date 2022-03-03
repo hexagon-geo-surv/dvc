@@ -6,9 +6,9 @@ from unittest.mock import patch
 import configobj
 import pytest
 
+from dvc.cli import main
 from dvc.config import Config
 from dvc.exceptions import DownloadError, RemoteCacheRequiredError, UploadError
-from dvc.main import main
 from dvc.utils.fs import remove
 from tests.basic_env import TestDvc
 
@@ -139,8 +139,8 @@ def test_upper_case_remote(tmp_dir, dvc, local_cloud):
 
 
 def test_dir_hash_should_be_key_order_agnostic(tmp_dir, dvc):
-    from dvc.objects.stage import stage
-    from dvc.objects.tree import Tree
+    from dvc.data.stage import stage
+    from dvc.data.tree import Tree
 
     tmp_dir.gen({"data": {"1": "1 content", "2": "2 content"}})
 
@@ -150,7 +150,7 @@ def test_dir_hash_should_be_key_order_agnostic(tmp_dir, dvc):
         [{"relpath": "1", "md5": "1"}, {"relpath": "2", "md5": "2"}]
     )
     tree.digest()
-    with patch("dvc.objects.stage._stage_tree", return_value=(None, tree)):
+    with patch("dvc.data.stage._stage_tree", return_value=(None, tree)):
         _, _, obj = stage(dvc.odb.local, path, dvc.odb.local.fs, "md5")
         hash1 = obj.hash_info
 
@@ -158,7 +158,7 @@ def test_dir_hash_should_be_key_order_agnostic(tmp_dir, dvc):
         [{"md5": "1", "relpath": "1"}, {"md5": "2", "relpath": "2"}]
     )
     tree.digest()
-    with patch("dvc.objects.stage._stage_tree", return_value=(None, tree)):
+    with patch("dvc.data.stage._stage_tree", return_value=(None, tree)):
         _, _, obj = stage(dvc.odb.local, path, dvc.odb.local.fs, "md5")
         hash2 = obj.hash_info
 
@@ -239,6 +239,7 @@ def test_remote_modify_local_on_repo_config(tmp_dir, dvc):
     assert dvc.config["remote"]["myremote"] == {
         "url": "http://example.com/path",
         "user": "xxx",
+        "verify": False,
     }
 
 
@@ -246,14 +247,15 @@ def test_external_dir_resource_on_no_cache(tmp_dir, dvc, tmp_path_factory):
     # https://github.com/iterative/dvc/issues/2647, is some situations
     # (external dir dependency) cache is required to calculate dir md5
     external_dir = tmp_path_factory.mktemp("external_dir")
-    (external_dir / "file").write_text("content")
+    file = external_dir / "file"
 
     dvc.odb.local = None
     with pytest.raises(RemoteCacheRequiredError):
         dvc.run(
-            cmd="echo hello world",
-            outs=[os.fspath(external_dir)],
-            single_stage=True,
+            cmd=f"echo content > {file}",
+            outs=[os.fspath(file)],
+            name="echo",
+            external=True,
         )
 
 
@@ -269,7 +271,7 @@ def test_push_order(tmp_dir, dvc, tmp_path_factory, mocker, local_remote):
     # foo .dir file should be uploaded after bar
     odb = dvc.cloud.get_remote_odb("upstream")
     foo_path = odb.hash_to_path(foo.hash_info.value)
-    bar_path = odb.hash_to_path(foo.obj.trie[("bar",)][1].value)
+    bar_path = odb.hash_to_path(foo.obj._trie[("bar",)][1].value)
     paths = [args[3] for args, _ in mocked_upload.call_args_list]
     assert paths.index(foo_path) > paths.index(bar_path)
 

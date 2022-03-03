@@ -11,7 +11,7 @@ from typing import (
     Set,
 )
 
-from funcy import cached_property, memoize, nullcontext
+from funcy import cached_property, nullcontext
 
 from dvc.utils import dict_md5
 
@@ -19,9 +19,11 @@ if TYPE_CHECKING:
     from networkx import DiGraph
     from pygtrie import Trie
 
+    from dvc.data.tree import Tree
     from dvc.dependency import Dependency, ParamsDependency
     from dvc.fs.base import FileSystem
-    from dvc.objects import HashInfo, ObjectDB
+    from dvc.hash_info import HashInfo
+    from dvc.objects.db import ObjectDB
     from dvc.output import Output
     from dvc.repo.stage import StageLoad
     from dvc.stage import Stage
@@ -146,15 +148,46 @@ class Index:
 
         return build_outs_trie(self.stages)
 
-    @property
+    @cached_property
     def graph(self) -> "DiGraph":
-        return self.build_graph()
+        from dvc.repo.graph import build_graph
+
+        return build_graph(self.stages, self.outs_trie)
 
     @cached_property
     def outs_graph(self) -> "DiGraph":
         from dvc.repo.graph import build_outs_graph
 
         return build_outs_graph(self.graph, self.outs_trie)
+
+    @cached_property
+    def tree(self) -> "Tree":
+        from dvc.config import NoRemoteError
+        from dvc.data.tree import Tree
+
+        tree = Tree(None, None, None)
+
+        for out in self.outs:
+            if not out.use_cache:
+                continue
+
+            if out.is_in_repo:
+                fs_key = "repo"
+                key = self.repo.fs.path.relparts(
+                    out.fs_path, self.repo.root_dir
+                )
+            else:
+                fs_key = out.fs.scheme
+                key = out.fs.path.parts(out.fs_path)
+
+            out.meta.odb = out.odb
+            try:
+                out.meta.remote = self.repo.cloud.get_remote_odb(out.remote)
+            except NoRemoteError:
+                out.meta.remote = None
+            tree.add((fs_key,) + key, out.meta, out.hash_info)
+
+        return tree
 
     def used_objs(
         self,
@@ -230,15 +263,9 @@ class Index:
             stages.remove(stage)
         return stages
 
-    @memoize
-    def build_graph(self) -> "DiGraph":
-        from dvc.repo.graph import build_graph
-
-        return build_graph(self.stages, self.outs_trie)
-
     def check_graph(self) -> None:
         if not getattr(self.repo, "_skip_graph_checks", False):
-            self.build_graph()
+            self.graph  # pylint: disable=pointless-statement
 
     def dumpd(self) -> Dict[str, Dict]:
         def dump(stage: "Stage"):
@@ -275,7 +302,7 @@ if __name__ == "__main__":
         # pylint: disable=pointless-statement
         print("no of stages", len(index.stages))
     with log_durations(print, "building graph"):
-        index.build_graph()
+        index.graph  # pylint: disable=pointless-statement
     with log_durations(print, "calculating hash"):
         print(index.identifier)
     with log_durations(print, "updating"):

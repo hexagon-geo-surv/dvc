@@ -4,19 +4,19 @@ from datetime import datetime
 
 import pytest
 
-from dvc.cli import parse_args
-from dvc.command.experiments.apply import CmdExperimentsApply
-from dvc.command.experiments.branch import CmdExperimentsBranch
-from dvc.command.experiments.diff import CmdExperimentsDiff
-from dvc.command.experiments.gc import CmdExperimentsGC
-from dvc.command.experiments.init import CmdExperimentsInit
-from dvc.command.experiments.ls import CmdExperimentsList
-from dvc.command.experiments.pull import CmdExperimentsPull
-from dvc.command.experiments.push import CmdExperimentsPush
-from dvc.command.experiments.remove import CmdExperimentsRemove
-from dvc.command.experiments.run import CmdExperimentsRun
-from dvc.command.experiments.show import CmdExperimentsShow, show_experiments
-from dvc.exceptions import DvcParserError, InvalidArgumentError
+from dvc.cli import DvcParserError, parse_args
+from dvc.commands.experiments.apply import CmdExperimentsApply
+from dvc.commands.experiments.branch import CmdExperimentsBranch
+from dvc.commands.experiments.diff import CmdExperimentsDiff
+from dvc.commands.experiments.gc import CmdExperimentsGC
+from dvc.commands.experiments.init import CmdExperimentsInit
+from dvc.commands.experiments.ls import CmdExperimentsList
+from dvc.commands.experiments.pull import CmdExperimentsPull
+from dvc.commands.experiments.push import CmdExperimentsPush
+from dvc.commands.experiments.remove import CmdExperimentsRemove
+from dvc.commands.experiments.run import CmdExperimentsRun
+from dvc.commands.experiments.show import CmdExperimentsShow, show_experiments
+from dvc.exceptions import InvalidArgumentError
 from dvc.repo import Repo
 from dvc.stage import PipelineStage
 from tests.utils import ANY
@@ -99,6 +99,8 @@ def test_experiments_show(dvc, scm, mocker):
             "--param-deps",
             "-n",
             "1",
+            "--rev",
+            "foo",
         ]
     )
     assert cli_args.func == CmdExperimentsShow
@@ -113,8 +115,9 @@ def test_experiments_show(dvc, scm, mocker):
         all_tags=True,
         all_branches=True,
         all_commits=True,
-        sha_only=True,
         num=1,
+        revs="foo",
+        sha_only=True,
         param_deps=True,
     )
 
@@ -129,6 +132,7 @@ def test_experiments_run(dvc, scm, mocker):
         "tmp_dir": False,
         "checkpoint_resume": None,
         "reset": False,
+        "machine": None,
     }
     default_arguments.update(repro_arguments)
 
@@ -217,7 +221,8 @@ def test_experiments_push(dvc, scm, mocker):
             "experiments",
             "push",
             "origin",
-            "experiment",
+            "experiment1",
+            "experiment2",
             "--force",
             "--no-cache",
             "--remote",
@@ -237,7 +242,7 @@ def test_experiments_push(dvc, scm, mocker):
     m.assert_called_once_with(
         cmd.repo,
         "origin",
-        "experiment",
+        ["experiment1", "experiment2"],
         force=True,
         push_cache=False,
         dvc_remote="my-remote",
@@ -272,7 +277,7 @@ def test_experiments_pull(dvc, scm, mocker):
     m.assert_called_once_with(
         cmd.repo,
         "origin",
-        "experiment",
+        ["experiment"],
         force=True,
         pull_cache=False,
         dvc_remote="my-remote",
@@ -646,6 +651,7 @@ def test_experiments_init_config(dvc, scm, mocker):
 
     assert isinstance(cmd, CmdExperimentsInit)
     assert cmd.run() == 0
+
     m.assert_called_once_with(
         ANY(Repo),
         name="train",
@@ -758,3 +764,37 @@ def test_experiments_init_extra_args(extra_args, expected_kw, mocker):
 def test_experiments_init_type_invalid_choice():
     with pytest.raises(DvcParserError):
         parse_args(["exp", "init", "--type=invalid", "cmd"])
+
+
+def test_show_experiments_pcp(tmp_dir, mocker):
+    all_experiments = {
+        "workspace": {
+            "baseline": {
+                "data": {
+                    "timestamp": None,
+                    "params": {"params.yaml": {"data": {"foo": 1}}},
+                    "queued": False,
+                    "running": False,
+                    "executor": None,
+                    "metrics": {
+                        "scores.json": {"data": {"bar": 0.9544670443829399}}
+                    },
+                }
+            }
+        },
+    }
+    experiments_table = mocker.patch(
+        "dvc.commands.experiments.show.experiments_table"
+    )
+    td = experiments_table.return_value
+
+    show_experiments(all_experiments, pcp=True)
+
+    td.drop.assert_called_with("Created")
+    td.dropna.assert_called_with("rows", how="all", subset=set())
+    td.drop_duplicates.assert_called_with("rows", subset=set())
+
+    kwargs = td.to_parallel_coordinates.call_args[1]
+
+    assert kwargs["output_path"] == str(tmp_dir / "dvc_plots")
+    assert kwargs["color_by"] == "Experiment"

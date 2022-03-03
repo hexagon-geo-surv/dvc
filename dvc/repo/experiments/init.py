@@ -8,23 +8,18 @@ from typing import (
     Callable,
     Dict,
     Iterable,
-    List,
     Optional,
     TextIO,
     Tuple,
     Union,
-    cast,
 )
 
-from funcy import compact, lremove
-from rich.rule import Rule
-from rich.syntax import Syntax
+from funcy import compact, lremove, lsplit
 
 from dvc.exceptions import DvcException
 from dvc.stage import PipelineStage
-from dvc.stage.serialize import to_pipeline_file
 from dvc.types import OptStr
-from dvc.utils.serialize import dumps_yaml
+from dvc.utils import humanize
 
 if TYPE_CHECKING:
     from dvc.repo import Repo
@@ -80,16 +75,22 @@ def _disable_logging(highest_level=logging.CRITICAL):
         logging.disable(previous_level)
 
 
-def build_workspace_tree(workspace: Dict[str, str]) -> "Tree":
+def build_workspace_tree(workspace: Dict[str, str], label: str) -> "Tree":
     from rich.tree import Tree
 
-    tree = Tree(
-        "DVC assumes the following workspace structure:",
-        highlight=True,
-    )
+    tree = Tree(label, highlight=True)
     for value in sorted(workspace.values()):
         tree.add(f"[green]{value}[/green]")
     return tree
+
+
+def display_workspace_tree(workspace: Dict[str, str], label: str) -> None:
+    d = workspace.copy()
+    d.pop("cmd", None)
+
+    if d:
+        ui.write(build_workspace_tree(d, label), styled=True)
+    ui.write(styled=True)
 
 
 PIPELINE_FILE_LINK = "https://s.dvc.org/g/pipeline-files"
@@ -104,55 +105,40 @@ def init_interactive(
     stream: Optional[TextIO] = None,
 ) -> Dict[str, str]:
     command = provided.pop("cmd", None)
-    primary = lremove(provided.keys(), ["code", "data", "models", "params"])
-    secondary = lremove(
-        provided.keys(), ["live"] if live else ["metrics", "plots"]
+    prompts = lremove(provided.keys(), ["code", "data", "models", "params"])
+    prompts.extend(
+        lremove(provided.keys(), ["live"] if live else ["metrics", "plots"])
     )
-    prompts = primary + secondary
-
-    workspace = {**defaults, **provided}
-    if not live and "live" not in provided:
-        workspace.pop("live", None)
-    for key in ("plots", "metrics"):
-        if live and key not in provided:
-            workspace.pop(key, None)
 
     ret: Dict[str, str] = {}
+    if prompts or command:
+        ui.error_write(
+            f"This command will guide you to set up a [bright_blue]{name}[/]",
+            "stage in [green]dvc.yaml[/].",
+            f"\nSee [repr.url]{PIPELINE_FILE_LINK}[/].\n",
+            styled=True,
+        )
+
     if command:
         ret["cmd"] = command
-
-    if not prompts and command:
-        return ret
-
-    ui.error_write(
-        f"This command will guide you to set up a [bright_blue]{name}[/]",
-        "stage in [green]dvc.yaml[/].",
-        f"\nSee [repr.url]{PIPELINE_FILE_LINK}[/].\n",
-        styled=True,
-    )
-
-    if not command:
+    else:
         ret.update(
             compact(_prompts(["cmd"], allow_omission=False, stream=stream))
         )
         if prompts:
             ui.error_write(styled=True)
 
-    if not prompts:
-        return ret
-
-    ui.error_write(
-        "Enter the paths for dependencies and outputs of the command.",
-        styled=True,
-    )
-    if workspace:
-        ui.error_write(build_workspace_tree(workspace), styled=True)
-    ui.error_write(styled=True)
-    ret.update(
-        compact(
-            _prompts(prompts, defaults, validator=validator, stream=stream)
+    if prompts:
+        ui.error_write(
+            "Enter the paths for dependencies and outputs of the command.",
+            styled=True,
         )
-    )
+        ret.update(
+            compact(
+                _prompts(prompts, defaults, validator=validator, stream=stream)
+            )
+        )
+        ui.error_write(styled=True)
     return ret
 
 
@@ -168,33 +154,68 @@ def _check_stage_exists(
         )
 
 
-def loadd_params(path: str) -> Dict[str, List[str]]:
-    from dvc.utils.serialize import LOADERS
-
-    _, ext = os.path.splitext(path)
-    return {path: list(LOADERS[ext](path))}
-
-
-def validate_prompts(key: str, value: str) -> Union[Any, Tuple[Any, str]]:
+def validate_prompts(
+    repo: "Repo", key: str, value: str
+) -> Union[Any, Tuple[Any, str]]:
     from dvc.ui.prompt import InvalidResponse
 
     if key == "params":
+        import errno
+
+        from dvc.dependency.param import ParamsDependency
+
         assert isinstance(value, str)
         msg_format = (
             "[prompt.invalid]'{0}' {1}. "
             "Please retry with an existing parameters file."
         )
-        if not os.path.exists(value):
-            raise InvalidResponse(msg_format.format(value, "does not exist"))
-        if os.path.isdir(value):
-            raise InvalidResponse(msg_format.format(value, "is a directory"))
+        try:
+            ParamsDependency(None, value, repo=repo).validate_filepath()
+        except (IsADirectoryError, FileNotFoundError) as e:
+            suffices = {
+                errno.EISDIR: "is a directory",
+                errno.ENOENT: "does not exist",
+            }
+            raise InvalidResponse(msg_format.format(value, suffices[e.errno]))
     elif key in ("code", "data"):
         if not os.path.exists(value):
-            return value, (
-                f"[yellow]'{value}' does not exist in the workspace. "
-                '"exp run" may fail.[/]'
+            typ = "file" if is_file(value) else "directory"
+            return (
+                value,
+                f"[yellow]'{value}' does not exist, "
+                f"the {typ} will be created. ",
             )
     return value
+
+
+def is_file(path: str) -> bool:
+    _, ext = os.path.splitext(path)
+    return bool(ext)
+
+
+def init_deps(stage: PipelineStage) -> None:
+    from funcy import rpartial
+
+    from dvc.dependency import ParamsDependency
+    from dvc.fs.local import localfs
+
+    new_deps = [dep for dep in stage.deps if not dep.exists]
+    params, deps = lsplit(rpartial(isinstance, ParamsDependency), new_deps)
+
+    if new_deps:
+        paths = map("[green]{0}[/]".format, new_deps)
+        ui.write(f"Created {humanize.join(paths)}.", styled=True)
+
+    # always create a file for params, detect file/folder based on extension
+    # for other dependencies
+    dirs = [dep.fs_path for dep in deps if not is_file(dep.fs_path)]
+    files = [dep.fs_path for dep in deps + params if is_file(dep.fs_path)]
+    for path in dirs:
+        localfs.makedirs(path)
+    for path in files:
+        localfs.makedirs(localfs.path.parent(path), exist_ok=True)
+        with localfs.open(path, "w", encoding="utf-8"):
+            pass
 
 
 def init(
@@ -220,7 +241,7 @@ def init(
     if interactive:
         defaults = init_interactive(
             name,
-            validator=validate_prompts,
+            validator=partial(validate_prompts, repo),
             defaults=defaults,
             live=with_live,
             provided=overrides,
@@ -242,7 +263,17 @@ def init(
     params_kv = []
     params = context.get("params")
     if params:
-        params_kv.append(loadd_params(params))
+        from dvc.dependency.param import (
+            MissingParamsFile,
+            ParamsDependency,
+            ParamsIsADirectoryError,
+        )
+
+        try:
+            params_d = ParamsDependency(None, params, repo=repo).read_file()
+        except (MissingParamsFile, ParamsIsADirectoryError) as exc:
+            raise DvcException(f"{exc}.")  # swallow cause for display
+        params_kv.append({params: list(params_d.keys())})
 
     checkpoint_out = bool(context.get("live"))
     models = context.get("models")
@@ -258,27 +289,13 @@ def init(
         **{"checkpoints" if checkpoint_out else "outs": compact([models])},
     )
 
-    if interactive:
-        ui.error_write(Rule(style="green"), styled=True)
-        _yaml = dumps_yaml(to_pipeline_file(cast(PipelineStage, stage)))
-        syn = Syntax(_yaml, "yaml", theme="ansi_dark")
-        ui.error_write(syn, styled=True)
-
-    from dvc.ui.prompt import Confirm
-
-    if not interactive or Confirm.ask(
-        "Do you want to add the above contents to dvc.yaml?",
-        console=ui.error_console,
-        default=True,
-        stream=stream,
-    ):
-        with _disable_logging(), repo.scm_context(autostage=True, quiet=True):
-            stage.dump(update_lock=False)
-            stage.ignore_outs()
-            if params:
-                repo.scm_context.track_file(params)
-    else:
-        raise DvcException("Aborting ...")
+    with _disable_logging(), repo.scm_context(autostage=True, quiet=True):
+        stage.dump(update_lock=False)
+        stage.ignore_outs()
+        display_workspace_tree(context, "Using experiment project structure:")
+        init_deps(stage)
+        if params:
+            repo.scm_context.track_file(params)
 
     assert isinstance(stage, PipelineStage)
     return stage

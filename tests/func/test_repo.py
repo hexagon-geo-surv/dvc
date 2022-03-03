@@ -1,5 +1,5 @@
+from dvc.data.db import ODBManager
 from dvc.dvcfile import PIPELINE_FILE, PIPELINE_LOCK
-from dvc.objects.db import ODBManager
 from dvc.system import System
 
 
@@ -19,6 +19,7 @@ def test_destroy(tmp_dir, dvc, run_copy):
     # Remove all the files related to DVC
     for path in [
         ".dvc",
+        ".dvcignore",
         "file.dvc",
         "file2.dvc",
         "dir.dvc",

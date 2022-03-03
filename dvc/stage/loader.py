@@ -6,8 +6,8 @@ from itertools import chain
 from funcy import cached_property, get_in, lcat, once, project
 
 from dvc import dependency, output
+from dvc.data.meta import Meta
 from dvc.hash_info import HashInfo
-from dvc.objects.meta import Meta
 from dvc.parsing import FOREACH_KWD, JOIN, DataResolver, EntryNotFound
 from dvc.parsing.versions import LOCKFILE_VERSION
 
@@ -68,7 +68,6 @@ class StageLoader(Mapping):
             info = get_in(checksums, [key, path], {})
             info = info.copy()
             info.pop("path", None)
-            item.isexec = info.pop("isexec", None)
             item.meta = Meta.from_dict(info)
             item.hash_info = HashInfo.from_dict(info)
 

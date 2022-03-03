@@ -5,8 +5,7 @@ from typing import IO, TYPE_CHECKING, Any, Dict, Iterator, Optional, overload
 from funcy import cached_property
 from tqdm.utils import CallbackIOWrapper
 
-from dvc.progress import DEFAULT_CALLBACK
-
+from ._callback import DEFAULT_CALLBACK
 from .base import FileSystem
 
 FSPath = str
@@ -50,20 +49,11 @@ class FSSpecWrapper(FileSystem):
         host filesystem"""
         return {}
 
-    def _isdir(self, path: AnyFSPath) -> bool:
+    def isdir(self, path: AnyFSPath) -> bool:
         return self.fs.isdir(path)
 
-    def isdir(self, path: AnyFSPath) -> bool:
-        try:
-            return self._isdir(path)
-        except FileNotFoundError:
-            return False
-
     def isfile(self, path: AnyFSPath) -> bool:
-        try:
-            return not self._isdir(path)
-        except FileNotFoundError:
-            return False
+        return self.fs.isfile(path)
 
     def is_empty(self, path: AnyFSPath) -> bool:
         entry = self.info(path)
@@ -141,8 +131,18 @@ class FSSpecWrapper(FileSystem):
         self.makedirs(self.path.parent(to_info))
         with self.open(to_info, "wb") as fdest:
             shutil.copyfileobj(
-                fobj, fdest, length=getattr(fdest, "blocksize", None)
+                fobj,
+                fdest,
+                length=getattr(fdest, "blocksize", None),  # type: ignore
             )
+
+    def walk(
+        self,
+        top: AnyFSPath,
+        topdown: bool = True,
+        **kwargs: Any,
+    ):
+        return self.fs.walk(top, topdown=topdown, **kwargs)
 
 
 # pylint: disable=abstract-method
@@ -170,6 +170,18 @@ class ObjectFSWrapper(FSSpecWrapper):
             and entry["type"] == "file"
             and entry["name"].endswith("/")
         )
+
+    def isdir(self, path: AnyFSPath) -> bool:
+        try:
+            return self._isdir(path)
+        except FileNotFoundError:
+            return False
+
+    def isfile(self, path: AnyFSPath) -> bool:
+        try:
+            return not self._isdir(path)
+        except FileNotFoundError:
+            return False
 
     def find(self, path, prefix=None):
         if prefix:

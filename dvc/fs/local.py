@@ -3,10 +3,10 @@ import os
 
 from dvc.scheme import Schemes
 from dvc.system import System
-from dvc.utils import is_exec, tmp_fname
+from dvc.utils import tmp_fname
 from dvc.utils.fs import copy_fobj_to_file, copyfile, makedirs, move, remove
 
-from ..progress import DEFAULT_CALLBACK
+from ._callback import DEFAULT_CALLBACK
 from .base import FileSystem
 
 logger = logging.getLogger(__name__)
@@ -51,14 +51,15 @@ class LocalFileSystem(FileSystem):
     def iscopy(self, path):
         return not (System.is_symlink(path) or System.is_hardlink(path))
 
-    def walk(self, top, topdown=True, onerror=None, **kwargs):
+    def walk(self, top, topdown=True, **kwargs):
         """Directory fs generator.
 
         See `os.walk` for the docs. Differences:
         - no support for symlinks
         """
         for root, dirs, files in os.walk(
-            top, topdown=topdown, onerror=onerror
+            top,
+            topdown=topdown,
         ):
             yield os.path.normpath(root), dirs, files
 
@@ -82,10 +83,6 @@ class LocalFileSystem(FileSystem):
 
     def makedirs(self, path, **kwargs):
         makedirs(path, exist_ok=kwargs.pop("exist_ok", True))
-
-    def isexec(self, path):
-        mode = self.info(path)["mode"]
-        return is_exec(mode)
 
     def move(self, from_info, to_info):
         self.makedirs(self.path.parent(to_info))

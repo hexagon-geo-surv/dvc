@@ -5,7 +5,6 @@ from typing import Dict, List
 
 from dvc.exceptions import PathMissingError
 from dvc.repo import locked
-from dvc.repo.experiments.utils import fix_exp_head
 
 logger = logging.getLogger(__name__)
 
@@ -27,8 +26,7 @@ def diff(self, a_rev="HEAD", b_rev=None, targets=None):
 
     repo_fs = RepoFileSystem(self)
 
-    a_rev = fix_exp_head(self.scm, a_rev)
-    b_rev = fix_exp_head(self.scm, b_rev) if b_rev else "workspace"
+    b_rev = b_rev if b_rev else "workspace"
     results = {}
     missing_targets = {}
     for rev in self.brancher(revs=[a_rev, b_rev]):
@@ -113,8 +111,8 @@ def _paths_checksums(repo, targets):
 
 
 def _output_paths(repo, targets):
+    from dvc.data.stage import stage as ostage
     from dvc.fs.local import LocalFileSystem
-    from dvc.objects.stage import stage as ostage
 
     on_working_fs = isinstance(repo.fs, LocalFileSystem)
 
@@ -170,23 +168,32 @@ def _output_paths(repo, targets):
 
 
 def _dir_output_paths(fs, fs_path, obj, targets=None):
+    if fs.scheme == "local":
+        # NOTE: workaround for filesystems that are based on full local paths
+        # (e.g. gitfs, dvcfs, repofs). Proper solution is to use upcoming
+        # fsspec's prefixfs to use relpaths as fs_paths.
+        base = fs.path.relpath(fs_path, os.getcwd())
+    else:
+        base = fs_path
     for key, _, oid in obj:
         fname = fs.path.join(fs_path, *key)
         if targets is None or any(
             fs.path.isin_or_eq(fname, target) for target in targets
         ):
             # pylint: disable=no-member
-            yield fs.path.join(fs.path.name(fs_path), *key), oid.value
+            yield fs.path.join(base, *key), oid.value
 
 
 def _filter_missing(repo_fs, paths):
     for path in paths:
         try:
-            metadata = repo_fs.metadata(path)
-            if metadata.is_dvc:
-                out = metadata.outs[0]
-                if out.status().get(str(out)) == "not in cache":
-                    yield path
+            info = repo_fs.info(path)
+            if (
+                info["isdvc"]
+                and info["type"] == "directory"
+                and not info["meta"].obj
+            ):
+                yield path
         except FileNotFoundError:
             pass
 
@@ -197,7 +204,7 @@ def _targets_to_paths(repo_fs, targets):
 
     for target in targets:
         if repo_fs.exists(target):
-            paths.append(repo_fs.metadata(target).fs_path)
+            paths.append(os.path.abspath(target))
         else:
             missing.append(target)
 
