@@ -1,4 +1,5 @@
 import os
+import textwrap
 
 import pytest
 
@@ -37,6 +38,36 @@ def test_commit_force(tmp_dir, dvc):
 
     dvc.commit(stage.path, force=True)
     assert dvc.status([stage.path]) == {}
+
+
+def test_commit_preserve_fields(tmp_dir, dvc):
+    text = textwrap.dedent(
+        """\
+        # top comment
+        desc: top desc
+        outs:
+        - path: foo # out comment
+          desc: out desc
+          remote: testremote
+        meta: some metadata
+    """
+    )
+    tmp_dir.gen("foo.dvc", text)
+    tmp_dir.dvc_gen("foo", "foo", commit=False)
+    dvc.commit("foo")
+    assert (tmp_dir / "foo.dvc").read_text() == textwrap.dedent(
+        """\
+        # top comment
+        desc: top desc
+        outs:
+        - path: foo # out comment
+          desc: out desc
+          remote: testremote
+          md5: acbd18db4cc2f85cedef654fccc4a4d8
+          size: 3
+        meta: some metadata
+    """
+    )
 
 
 @pytest.mark.parametrize("run_kw", [{"single_stage": True}, {"name": "copy"}])
@@ -146,10 +177,13 @@ def test_commit_granular_dir(tmp_dir, dvc):
 
     cache = tmp_dir / ".dvc" / "cache"
 
-    assert set(cache.glob("*/*")) == set()
+    assert set(cache.glob("*/*")) == {
+        cache / "1a" / "ca2c799df82929bbdd976557975546",
+    }
 
     dvc.commit(os.path.join("data", "foo"))
     assert set(cache.glob("*/*")) == {
+        cache / "1a" / "ca2c799df82929bbdd976557975546",
         cache / "1a" / "ca2c799df82929bbdd976557975546.dir",
         cache / "ac" / "bd18db4cc2f85cedef654fccc4a4d8",
     }
@@ -157,6 +191,8 @@ def test_commit_granular_dir(tmp_dir, dvc):
 
     dvc.commit(os.path.join("data", "subdir"))
     assert set(cache.glob("*/*")) == {
+        cache / "26" / "d6b64d96a660707412f523e8184b5f",
+        cache / "1a" / "ca2c799df82929bbdd976557975546",
         cache / "1a" / "ca2c799df82929bbdd976557975546.dir",
         cache / "ac" / "bd18db4cc2f85cedef654fccc4a4d8",
         cache / "4c" / "e8d2a2cf314a52fa7f315ca37ca445",
@@ -166,6 +202,8 @@ def test_commit_granular_dir(tmp_dir, dvc):
 
     dvc.commit(os.path.join("data"))
     assert set(cache.glob("*/*")) == {
+        cache / "26" / "d6b64d96a660707412f523e8184b5f",
+        cache / "1a" / "ca2c799df82929bbdd976557975546",
         cache / "1a" / "ca2c799df82929bbdd976557975546.dir",
         cache / "ac" / "bd18db4cc2f85cedef654fccc4a4d8",
         cache / "4c" / "e8d2a2cf314a52fa7f315ca37ca445",

@@ -52,18 +52,15 @@ from textwrap import dedent
 import pytest
 
 from dvc.logger import disable_other_loggers
-from dvc.testing.tmp_dir import git_init
 
 __all__ = [
     "run_copy",
     "run_head",
     "erepo_dir",
     "git_dir",
-    "git_init",
     "git_upstream",
     "git_downstream",
 ]
-
 
 # see https://github.com/iterative/dvc/issues/3167
 disable_other_loggers()
@@ -151,7 +148,7 @@ class GitRemote:
 @pytest.fixture
 def git_upstream(tmp_dir, erepo_dir, git_dir, request):
     remote = erepo_dir if "dvc" in request.fixturenames else git_dir
-    url = "file://{}".format(remote.resolve().as_posix())
+    url = f"file://{remote.resolve().as_posix()}"
     tmp_dir.scm.gitpython.repo.create_remote("upstream", url)
     return GitRemote(remote, "upstream", url)
 
@@ -159,6 +156,6 @@ def git_upstream(tmp_dir, erepo_dir, git_dir, request):
 @pytest.fixture
 def git_downstream(tmp_dir, erepo_dir, git_dir, request):
     remote = erepo_dir if "dvc" in request.fixturenames else git_dir
-    url = "file://{}".format(tmp_dir.resolve().as_posix())
+    url = f"file://{tmp_dir.resolve().as_posix()}"
     remote.scm.gitpython.repo.create_remote("upstream", url)
     return GitRemote(remote, "upstream", url)

@@ -28,8 +28,7 @@ def _reproduce_stage(stage: "Stage", **kwargs):
         else:
             raise DvcException(
                 "Checkpoint stages are not supported in 'dvc repro'. "
-                "Checkpoint stages must be reproduced with 'dvc exp run' "
-                "or 'dvc exp resume'."
+                "Checkpoint stages must be reproduced with 'dvc exp run'. "
             )
 
     if stage.frozen and not stage.is_import:
@@ -64,7 +63,7 @@ def _get_stage_files(stage: "Stage") -> typing.Iterator[str]:
         if (
             not dep.use_scm_ignore
             and dep.is_in_repo
-            and not stage.repo.repo_fs.isdvc(dep.fs_path)
+            and not stage.repo.dvcfs.isdvc(dep.fs_path)
         ):
             yield dep.fs_path
     for out in stage.outs:
@@ -218,7 +217,7 @@ def _reproduce_stages(
         except CheckpointKilledError:
             raise
         except Exception as exc:
-            raise ReproductionError(stage.relpath) from exc
+            raise ReproductionError(stage.addressing) from exc
 
     if on_unchanged is not None:
         on_unchanged(unchanged)

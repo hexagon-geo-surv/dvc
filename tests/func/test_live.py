@@ -6,7 +6,9 @@ import pytest
 from funcy import first
 
 from dvc import stage as stage_module
-from dvc.render.utils import get_files
+
+pytest.importorskip("dvclive", reason="no dvclive")
+
 
 LIVE_SCRIPT = dedent(
     """
@@ -20,7 +22,7 @@ LIVE_SCRIPT = dedent(
            metrics_logger.log("loss", 1-i/r)
            metrics_logger.log("accuracy", i/r)
            image = Image.new("RGB", (10,10), (i,i,i))
-           metrics_logger.log("image.jpg", image)
+           metrics_logger.log_image("image.jpg", image)
            metrics_logger.next_step()"""
 )
 
@@ -60,15 +62,9 @@ LIVE_CHECKPOINT_SCRIPT = dedent(
 
 @pytest.fixture
 def live_stage(tmp_dir, scm, dvc, mocker):
-    try:
-        import dvclive  # noqa, pylint:disable=unused-import
-    except ImportError:
-        pytest.skip("no dvclive")
-
     mocker.patch("dvc.stage.run.Monitor.AWAIT", 0.01)
 
     def make(
-        summary=True,
         html=True,
         live=None,
         live_no_cache=None,
@@ -84,7 +80,6 @@ def live_stage(tmp_dir, scm, dvc, mocker):
             name="live_stage",
             live=live,
             live_no_cache=live_no_cache,
-            live_no_summary=not summary,
             live_no_html=not html,
         )
 
@@ -96,10 +91,9 @@ def live_stage(tmp_dir, scm, dvc, mocker):
 
 
 @pytest.mark.parametrize("html", (True, False))
-@pytest.mark.parametrize("summary", (True, False))
-def test_export_config(tmp_dir, dvc, mocker, live_stage, summary, html):
+def test_export_config(tmp_dir, dvc, mocker, live_stage, html):
     run_spy = mocker.spy(stage_module.run, "_run")
-    live_stage(summary=summary, html=html, live="logs")
+    live_stage(html=html, live="logs")
 
     assert run_spy.call_count == 1
     _, kwargs = run_spy.call_args
@@ -107,15 +101,12 @@ def test_export_config(tmp_dir, dvc, mocker, live_stage, summary, html):
     assert "DVCLIVE_PATH" in kwargs["env"]
     assert kwargs["env"]["DVCLIVE_PATH"] == "logs"
 
-    assert "DVCLIVE_SUMMARY" in kwargs["env"]
-    assert kwargs["env"]["DVCLIVE_SUMMARY"] == str(int(summary))
-
     assert "DVCLIVE_HTML" in kwargs["env"]
     assert kwargs["env"]["DVCLIVE_HTML"] == str(int(html))
 
 
 def test_live_provides_metrics(tmp_dir, dvc, live_stage):
-    live_stage(summary=True, live="logs")
+    live_stage(live="logs")
 
     assert (tmp_dir / "logs.json").is_file()
     assert dvc.metrics.show() == {
@@ -130,29 +121,16 @@ def test_live_provides_metrics(tmp_dir, dvc, live_stage):
 
     assert (tmp_dir / "logs").is_dir()
     plots_data = dvc.plots.show()
-    files = get_files(plots_data)
-    assert os.path.join("logs", "accuracy.tsv") in files
-    assert os.path.join("logs", "loss.tsv") in files
-    assert os.path.join("logs", "0", "image.jpg") in files
-    assert os.path.join("logs", "1", "image.jpg") in files
-
-
-def test_live_provides_no_metrics(tmp_dir, dvc, live_stage):
-    live_stage(summary=False, live="logs")
-
-    assert not (tmp_dir / "logs.json").is_file()
-    assert dvc.metrics.show() == {"": {}}
-
-    assert (tmp_dir / "logs").is_dir()
-    plots_data = dvc.plots.show()
-    files = get_files(plots_data)
-    assert os.path.join("logs", "accuracy.tsv") in files
-    assert os.path.join("logs", "loss.tsv") in files
+    files = list(plots_data["workspace"]["data"])
+    assert os.path.join("logs", "scalars", "accuracy.tsv") in files
+    assert os.path.join("logs", "scalars", "loss.tsv") in files
+    assert os.path.join("logs", "images", "0", "image.jpg") in files
+    assert os.path.join("logs", "images", "1", "image.jpg") in files
 
 
 @pytest.mark.parametrize("typ", ("live", "live_no_cache"))
 def test_experiments_track_summary(tmp_dir, scm, dvc, live_stage, typ):
-    live_stage(summary=True, **{typ: "logs"})
+    live_stage(**{typ: "logs"})
     baseline_rev = scm.get_rev()
 
     experiments = dvc.experiments.run(targets=["live_stage"], params=["foo=2"])
@@ -165,7 +143,7 @@ def test_experiments_track_summary(tmp_dir, scm, dvc, live_stage, typ):
 
 @pytest.mark.parametrize("html", [True, False])
 def test_live_html(tmp_dir, dvc, live_stage, html):
-    live_stage(html=html, live="logs")
+    live_stage(live="logs", html=html)
 
     assert (tmp_dir / "logs_dvc_plots" / "index.html").is_file() == html
     if html:
@@ -175,11 +153,6 @@ def test_live_html(tmp_dir, dvc, live_stage, html):
 
 @pytest.fixture
 def live_checkpoint_stage(tmp_dir, scm, dvc, mocker):
-    try:
-        import dvclive  # noqa, pylint:disable=unused-import
-    except ImportError:
-        pytest.skip("no dvclive")
-
     mocker.patch("dvc.stage.run.Monitor.AWAIT", 0.01)
 
     def make(live=None, live_no_cache=None):
@@ -210,14 +183,10 @@ def checkpoints_metric(show_results, metric_file, metric_name):
     tmp.pop("workspace")
     tmp = first(tmp.values())
     tmp.pop("baseline")
-    return list(
-        map(
-            lambda exp: exp["data"]["metrics"][metric_file]["data"][
-                metric_name
-            ],
-            list(tmp.values()),
-        )
-    )
+    return [
+        exp["data"]["metrics"][metric_file]["data"][metric_name]
+        for exp in tmp.values()
+    ]
 
 
 @pytest.mark.parametrize("typ", ("live", "live_no_cache"))
@@ -239,33 +208,6 @@ def test_live_checkpoints_resume(
     assert checkpoints_metric(results, "logs.json", "step") == [3, 2, 1, 0]
     assert checkpoints_metric(results, "logs.json", "metric1") == [4, 3, 2, 1]
     assert checkpoints_metric(results, "logs.json", "metric2") == [8, 6, 4, 2]
-
-
-def test_dvc_generates_html_during_run(tmp_dir, dvc, mocker, live_stage):
-    show_spy = mocker.spy(dvc.live, "show")
-    webbrowser_open = mocker.patch("dvc.repo.live.webbrowser_open")
-
-    # make sure script takes more time to execute than one monitor sleep cycle
-    monitor_await_time = 0.01
-    mocker.patch("dvc.stage.run.Monitor.AWAIT", monitor_await_time)
-
-    script = dedent(
-        """
-        from dvclive import Live
-        import sys
-        import time
-        metrics_logger = Live()
-        metrics_logger.log("loss", 1/2)
-        metrics_logger.log("accuracy", 1/2)
-        metrics_logger.next_step()
-        time.sleep({})""".format(
-            str(monitor_await_time * 10)
-        )
-    )
-    live_stage(summary=True, live="logs", code=script)
-
-    assert show_spy.call_count == 2
-    assert webbrowser_open.call_count == 2
 
 
 def test_dvclive_stage_with_different_wdir(tmp_dir, scm, dvc):

@@ -10,6 +10,7 @@ from dvc.dvcfile import PIPELINE_FILE
 from dvc.exceptions import DvcException
 from dvc.repo.experiments.utils import exp_refs_by_rev
 from dvc.scm import resolve_rev
+from dvc.stage.exceptions import StageFileDoesNotExistError
 from dvc.utils.serialize import PythonFileCorruptedError
 from tests.func.test_repro_multistage import COPY_SCRIPT
 
@@ -32,7 +33,7 @@ def test_new_simple(tmp_dir, scm, dvc, exp_stage, mocker, name, workspace):
 
     new_mock.assert_called_once()
     fs = scm.get_fs(exp)
-    with fs.open(tmp_dir / "metrics.yaml", mode="r", encoding="utf-8") as fobj:
+    with fs.open("metrics.yaml", mode="r", encoding="utf-8") as fobj:
         assert fobj.read().strip() == "foo: 2"
 
     if workspace:
@@ -74,7 +75,7 @@ def test_experiment_exists(tmp_dir, scm, dvc, exp_stage, mocker, workspace):
     exp = first(results)
 
     fs = scm.get_fs(exp)
-    with fs.open(tmp_dir / "metrics.yaml", mode="r", encoding="utf-8") as fobj:
+    with fs.open("metrics.yaml", mode="r", encoding="utf-8") as fobj:
         assert fobj.read().strip() == "foo: 3"
 
 
@@ -97,7 +98,7 @@ def test_failed_exp(tmp_dir, scm, dvc, exp_stage, mocker, caplog):
 
     mocker.patch(
         "concurrent.futures.Future.exception",
-        return_value=ReproductionError(exp_stage.relpath),
+        return_value=ReproductionError(exp_stage.addressing),
     )
     with caplog.at_level(logging.ERROR):
         dvc.experiments.run(exp_stage.addressing, tmp_dir=True)
@@ -144,7 +145,7 @@ def test_modify_params(tmp_dir, scm, dvc, mocker, changes, expected):
 
     new_mock.assert_called_once()
     fs = scm.get_fs(exp)
-    with fs.open(tmp_dir / "metrics.yaml", mode="r") as fobj:
+    with fs.open("metrics.yaml", mode="r") as fobj:
         assert fobj.read().strip() == expected
 
 
@@ -262,9 +263,9 @@ def test_update_py_params(tmp_dir, scm, dvc):
     exp_a = first(results)
 
     fs = scm.get_fs(exp_a)
-    with fs.open(tmp_dir / "params.py", mode="r", encoding="utf-8") as fobj:
+    with fs.open("params.py", mode="r", encoding="utf-8") as fobj:
         assert fobj.read().strip() == "INT = 2"
-    with fs.open(tmp_dir / "metrics.py", mode="r", encoding="utf-8") as fobj:
+    with fs.open("metrics.py", mode="r", encoding="utf-8") as fobj:
         assert fobj.read().strip() == "INT = 2"
 
     tmp_dir.gen(
@@ -308,9 +309,9 @@ def test_update_py_params(tmp_dir, scm, dvc):
         return text.replace("\r\n", "\n")
 
     fs = scm.get_fs(exp_a)
-    with fs.open(tmp_dir / "params.py", mode="r", encoding="utf-8") as fobj:
+    with fs.open("params.py", mode="r", encoding="utf-8") as fobj:
         assert _dos2unix(fobj.read().strip()) == result
-    with fs.open(tmp_dir / "metrics.py", mode="r", encoding="utf-8") as fobj:
+    with fs.open("metrics.py", mode="r", encoding="utf-8") as fobj:
         assert _dos2unix(fobj.read().strip()) == result
 
     tmp_dir.gen("params.py", "INT = 1\n")
@@ -437,7 +438,7 @@ def test_untracked(tmp_dir, scm, dvc, caplog, workspace):
     assert fs.exists("dvc.yaml")
     assert fs.exists("dvc.lock")
     assert fs.exists("copy.py")
-    with fs.open(tmp_dir / "metrics.yaml", mode="r", encoding="utf-8") as fobj:
+    with fs.open("metrics.yaml", mode="r", encoding="utf-8") as fobj:
         assert fobj.read().strip() == "foo: 2"
 
 
@@ -478,7 +479,7 @@ def test_list(tmp_dir, scm, dvc, exp_stage):
         baseline_a: {ref_info_a.name, ref_info_b.name}
     }
 
-    exp_list = dvc.experiments.ls(all_=True)
+    exp_list = dvc.experiments.ls(all_commits=True)
     assert {key: set(val) for key, val in exp_list.items()} == {
         baseline_a: {ref_info_a.name, ref_info_b.name},
         baseline_c: {ref_info_c.name},
@@ -514,8 +515,8 @@ def test_subdir(tmp_dir, scm, dvc, workspace):
 
     fs = scm.get_fs(exp)
     for fname in ["metrics.yaml", "dvc.lock"]:
-        assert fs.exists(subdir / fname)
-    with fs.open(subdir / "metrics.yaml", mode="r", encoding="utf-8") as fobj:
+        assert fs.exists(f"dir/{fname}")
+    with fs.open("dir/metrics.yaml", mode="r", encoding="utf-8") as fobj:
         assert fobj.read().strip() == "foo: 2"
 
     assert dvc.experiments.get_exact_name(exp) == ref_info.name
@@ -524,7 +525,7 @@ def test_subdir(tmp_dir, scm, dvc, workspace):
 
 @pytest.mark.parametrize("workspace", [True, False])
 def test_subrepo(tmp_dir, scm, workspace):
-    from tests.unit.fs.test_repo import make_subrepo
+    from tests.unit.fs.test_dvc import make_subrepo
 
     subrepo = tmp_dir / "dir" / "repo"
     make_subrepo(subrepo, scm)
@@ -559,8 +560,8 @@ def test_subrepo(tmp_dir, scm, workspace):
 
     fs = scm.get_fs(exp)
     for fname in ["metrics.yaml", "dvc.lock"]:
-        assert fs.exists(subrepo / fname)
-    with fs.open(subrepo / "metrics.yaml", mode="r", encoding="utf-8") as fobj:
+        assert fs.exists(f"dir/repo/{fname}")
+    with fs.open("dir/repo/metrics.yaml", mode="r", encoding="utf-8") as fobj:
         assert fobj.read().strip() == "foo: 2"
 
     assert subrepo.dvc.experiments.get_exact_name(exp) == ref_info.name
@@ -581,15 +582,13 @@ def test_queue(tmp_dir, scm, dvc, exp_stage, mocker):
     metrics = set()
     for exp in results:
         fs = scm.get_fs(exp)
-        with fs.open(
-            tmp_dir / "metrics.yaml", mode="r", encoding="utf-8"
-        ) as fobj:
+        with fs.open("metrics.yaml", mode="r", encoding="utf-8") as fobj:
             metrics.add(fobj.read().strip())
     assert expected == metrics
 
 
 def test_run_metrics(tmp_dir, scm, dvc, exp_stage, mocker):
-    from dvc.main import main
+    from dvc.cli import main
 
     mocker.patch.object(
         dvc.experiments, "run", return_value={"abc123": "abc123"}
@@ -629,7 +628,8 @@ def test_fix_exp_head(tmp_dir, scm, tail):
     head = "HEAD" + tail
     assert head == fix_exp_head(scm, head)
 
-    scm.set_ref(EXEC_BASELINE, "refs/heads/master")
+    rev = "1" * 40
+    scm.set_ref(EXEC_BASELINE, rev)
     assert EXEC_BASELINE + tail == fix_exp_head(scm, head)
     assert "foo" + tail == fix_exp_head(scm, "foo" + tail)
 
@@ -673,9 +673,9 @@ def test_modified_data_dep(tmp_dir, scm, dvc, workspace, params, target):
     for rev in dvc.brancher(revs=[exp]):
         if rev != exp:
             continue
-        with dvc.repo_fs.open((tmp_dir / "metrics.yaml").fs_path) as fobj:
+        with dvc.dvcfs.open("metrics.yaml") as fobj:
             assert fobj.read().strip() == params
-        with dvc.repo_fs.open((tmp_dir / "data").fs_path) as fobj:
+        with dvc.dvcfs.open("data") as fobj:
             assert fobj.read().strip() == "modified"
 
     if workspace:
@@ -703,3 +703,15 @@ def test_experiment_name_invalid(tmp_dir, scm, dvc, exp_stage, mocker):
             params=["foo=3"],
         )
     new_mock.assert_not_called()
+
+
+def test_experiments_workspace_not_log_exception(caplog, dvc, scm):
+    """Experiments run in workspace should not log exception.
+
+    Instead it should just leave it to be handled in the main entrypoints.
+    """
+    with caplog.at_level(logging.ERROR):
+        with pytest.raises(StageFileDoesNotExistError):
+            dvc.experiments.run()
+
+    assert not caplog.text

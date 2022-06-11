@@ -5,9 +5,9 @@ from uuid import uuid4
 
 import pytest
 
+from dvc.cli import main
 from dvc.dependency.base import DependencyDoesNotExistError
 from dvc.exceptions import InvalidArgumentError
-from dvc.main import main
 from dvc.stage import Stage
 from dvc.testing.test_workspace import TestImport as _TestImport
 from dvc.utils.fs import makedirs
@@ -252,11 +252,6 @@ def test_import_url_to_remote_absolute(
 def test_import_url_to_remote_invalid_combinations(dvc):
     with pytest.raises(InvalidArgumentError, match="--no-exec"):
         dvc.imp_url("s3://bucket/foo", no_exec=True, to_remote=True)
-
-
-empty_xfail = pytest.mark.xfail(
-    reason="https://github.com/iterative/dvc/issues/5521"
-)
 
 
 def test_import_url_to_remote_status(tmp_dir, dvc, local_cloud, local_remote):

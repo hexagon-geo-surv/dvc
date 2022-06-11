@@ -42,7 +42,7 @@ def _spawn_windows(cmd, env):
 
 
 def _spawn_posix(cmd, env):
-    from dvc.main import main
+    from dvc.cli import main
 
     # NOTE: using os._exit instead of sys.exit, because dvc built
     # with PyInstaller has trouble with SystemExit exception and throws
@@ -106,8 +106,9 @@ def daemon(args):
     cmd = ["daemon", "-q"] + args
 
     env = fix_env()
-    file_path = os.path.abspath(inspect.stack()[0][1])
-    env["PYTHONPATH"] = os.path.dirname(os.path.dirname(file_path))
+    if not is_binary():
+        file_path = os.path.abspath(inspect.stack()[0][1])
+        env["PYTHONPATH"] = os.path.dirname(os.path.dirname(file_path))
     env[DVC_DAEMON] = "1"
 
     _spawn(cmd, env)

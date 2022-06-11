@@ -1,10 +1,22 @@
 import os
 from itertools import chain
+from typing import TYPE_CHECKING, Optional
 
 from dvc.exceptions import PathMissingError
 
+if TYPE_CHECKING:
+    from dvc.fs.dvc import DvcFileSystem
 
-def ls(url, path=None, rev=None, recursive=None, dvc_only=False):
+    from . import Repo
+
+
+def ls(
+    url: str,
+    path: Optional[str] = None,
+    rev: str = None,
+    recursive: bool = None,
+    dvc_only: bool = False,
+):
     """Methods for getting files and outputs for the repo.
 
     Args:
@@ -29,14 +41,9 @@ def ls(url, path=None, rev=None, recursive=None, dvc_only=False):
     from . import Repo
 
     with Repo.open(url, rev=rev, subrepos=True, uninitialized=True) as repo:
-        fs_path = repo.root_dir
-        if path:
-            fs_path = os.path.abspath(repo.fs.path.join(fs_path, path))
+        path = path or ""
 
-        ret = _ls(repo.repo_fs, fs_path, recursive, dvc_only)
-
-        if path and not ret:
-            raise PathMissingError(path, repo, dvc_only=dvc_only)
+        ret = _ls(repo, path, recursive, dvc_only)
 
         ret_list = []
         for path, info in ret.items():
@@ -46,36 +53,43 @@ def ls(url, path=None, rev=None, recursive=None, dvc_only=False):
         return ret_list
 
 
-def _ls(fs, fs_path, recursive=None, dvc_only=False):
-    def onerror(exc):
-        raise exc
+def _ls(
+    repo: "Repo", path: str, recursive: bool = None, dvc_only: bool = False
+):
+    fs: "DvcFileSystem" = repo.dvcfs
+    fs_path = fs.from_os_path(path)
 
-    infos = []
     try:
-        for root, dirs, files in fs.walk(
-            fs_path, onerror=onerror, dvcfiles=True
-        ):
-            entries = chain(files, dirs) if not recursive else files
-            infos.extend(fs.path.join(root, entry) for entry in entries)
-            if not recursive:
-                break
-    except NotADirectoryError:
-        infos.append(fs_path)
+        fs_path = fs.info(fs_path)["name"]
     except FileNotFoundError:
-        return {}
+        raise PathMissingError(path, repo, dvc_only=dvc_only)
+
+    infos = {}
+    for root, dirs, files in fs.walk(
+        fs_path, dvcfiles=True, dvc_only=dvc_only
+    ):
+        entries = chain(files, dirs) if not recursive else files
+
+        for entry in entries:
+            entry_fs_path = fs.path.join(root, entry)
+            relparts = fs.path.relparts(entry_fs_path, fs_path)
+            name = os.path.join(*relparts)
+            infos[name] = fs.info(entry_fs_path)
+
+        if not recursive:
+            break
+
+    if not infos and fs.isfile(fs_path):
+        infos[os.path.basename(path)] = fs.info(fs_path)
 
     ret = {}
-    for info in infos:
-        metadata = fs.metadata(info)
-        if metadata.output_exists or not dvc_only:
-            path = (
-                fs.path.name(fs_path)
-                if fs_path == info
-                else fs.path.relpath(info, fs_path)
-            )
-            ret[path] = {
-                "isout": metadata.is_output,
-                "isdir": metadata.isdir,
-                "isexec": metadata.is_exec,
+    for name, info in infos.items():
+        dvc_info = info.get("dvc_info", {})
+        if dvc_info.get("outs") or not dvc_only:
+            ret[name] = {
+                "isout": dvc_info.get("isout", False),
+                "isdir": info["type"] == "directory",
+                "isexec": info.get("isexec", False),
             }
+
     return ret

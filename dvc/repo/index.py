@@ -11,7 +11,7 @@ from typing import (
     Set,
 )
 
-from funcy import cached_property, memoize, nullcontext
+from funcy import cached_property, nullcontext
 
 from dvc.utils import dict_md5
 
@@ -20,12 +20,14 @@ if TYPE_CHECKING:
     from pygtrie import Trie
 
     from dvc.dependency import Dependency, ParamsDependency
-    from dvc.fs.base import FileSystem
-    from dvc.objects import HashInfo, ObjectDB
+    from dvc.fs import FileSystem
     from dvc.output import Output
     from dvc.repo.stage import StageLoad
     from dvc.stage import Stage
     from dvc.types import StrPath, TargetType
+    from dvc_data.tree import Tree
+    from dvc_objects.db import ObjectDB
+    from dvc_objects.hash_info import HashInfo
 
 
 ObjectContainer = Dict[Optional["ObjectDB"], Set["HashInfo"]]
@@ -72,7 +74,7 @@ class Index:
         return self.stage_collector.collect_repo(onerror=onerror)
 
     def __repr__(self) -> str:
-        from dvc.fs.local import LocalFileSystem
+        from dvc.fs import LocalFileSystem
 
         rev = "workspace"
         if not isinstance(self.fs, LocalFileSystem):
@@ -88,6 +90,13 @@ class Index:
 
     def __iter__(self) -> Iterator["Stage"]:
         yield from self.stages
+
+    def __getitem__(self, item: str) -> "Stage":
+        """Get a stage by its addressing attribute."""
+        for stage in self:
+            if stage.addressing == item:
+                return stage
+        raise KeyError(f"{item} - available stages are {self.stages}")
 
     def filter(self, filter_fn: Callable[["Stage"], bool]) -> "Index":
         stages_it = filter(filter_fn, self)
@@ -146,15 +155,46 @@ class Index:
 
         return build_outs_trie(self.stages)
 
-    @property
+    @cached_property
     def graph(self) -> "DiGraph":
-        return self.build_graph()
+        from dvc.repo.graph import build_graph
+
+        return build_graph(self.stages, self.outs_trie)
 
     @cached_property
     def outs_graph(self) -> "DiGraph":
         from dvc.repo.graph import build_outs_graph
 
         return build_outs_graph(self.graph, self.outs_trie)
+
+    @cached_property
+    def tree(self) -> "Tree":
+        from dvc.config import NoRemoteError
+        from dvc_data.tree import Tree
+
+        tree = Tree(None, None, None)
+
+        for out in self.outs:
+            if not out.use_cache:
+                continue
+
+            if out.is_in_repo:
+                fs_key = "repo"
+                key = self.repo.fs.path.relparts(
+                    out.fs_path, self.repo.root_dir
+                )
+            else:
+                fs_key = out.fs.protocol
+                key = out.fs.path.parts(out.fs_path)
+
+            out.meta.odb = out.odb
+            try:
+                out.meta.remote = self.repo.cloud.get_remote_odb(out.remote)
+            except NoRemoteError:
+                out.meta.remote = None
+            tree.add((fs_key,) + key, out.meta, out.hash_info)
+
+        return tree
 
     def used_objs(
         self,
@@ -230,15 +270,9 @@ class Index:
             stages.remove(stage)
         return stages
 
-    @memoize
-    def build_graph(self) -> "DiGraph":
-        from dvc.repo.graph import build_graph
-
-        return build_graph(self.stages, self.outs_trie)
-
     def check_graph(self) -> None:
         if not getattr(self.repo, "_skip_graph_checks", False):
-            self.build_graph()
+            self.graph  # pylint: disable=pointless-statement
 
     def dumpd(self) -> Dict[str, Dict]:
         def dump(stage: "Stage"):
@@ -264,9 +298,14 @@ class Index:
 
 
 if __name__ == "__main__":
+    import logging
+
     from funcy import log_durations
 
+    from dvc.logger import setup
     from dvc.repo import Repo
+
+    setup(level=logging.TRACE)  # type: ignore[attr-defined]
 
     repo = Repo()
     index = Index(repo, repo.fs)
@@ -275,7 +314,7 @@ if __name__ == "__main__":
         # pylint: disable=pointless-statement
         print("no of stages", len(index.stages))
     with log_durations(print, "building graph"):
-        index.build_graph()
+        index.graph  # pylint: disable=pointless-statement
     with log_durations(print, "calculating hash"):
         print(index.identifier)
     with log_durations(print, "updating"):

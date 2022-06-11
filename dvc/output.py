@@ -7,33 +7,40 @@ from urllib.parse import urlparse
 from funcy import collecting, project
 from voluptuous import And, Any, Coerce, Length, Lower, Required, SetTo
 
-from dvc import objects, prompt
+from dvc import prompt
 from dvc.exceptions import (
+    CacheLinkError,
     CheckoutError,
     CollectCacheError,
+    ConfirmRemoveError,
     DvcException,
     MergeError,
     RemoteCacheRequiredError,
 )
-from dvc.objects.checkout import checkout
+from dvc_data import check as ocheck
+from dvc_data import load as oload
+from dvc_data.checkout import checkout
+from dvc_data.stage import stage as ostage
+from dvc_data.transfer import transfer as otransfer
+from dvc_data.tree import Tree
+from dvc_objects.errors import ObjectFormatError
+from dvc_objects.hash_info import HashInfo
+from dvc_objects.istextfile import istextfile
+from dvc_objects.meta import Meta
 
-from .fs import get_cloud_fs
-from .fs.hdfs import HDFSFileSystem
-from .fs.local import LocalFileSystem
-from .fs.s3 import S3FileSystem
-from .hash_info import HashInfo
-from .istextfile import istextfile
-from .objects import Tree
-from .objects.errors import ObjectFormatError
-from .objects.meta import Meta
-from .objects.stage import stage as ostage
-from .objects.transfer import transfer as otransfer
-from .scheme import Schemes
+from .fs import (
+    HDFSFileSystem,
+    LocalFileSystem,
+    RemoteMissingDepsError,
+    S3FileSystem,
+    Schemes,
+    get_cloud_fs,
+)
 from .utils import relpath
 from .utils.fs import path_isin
 
 if TYPE_CHECKING:
-    from .objects.db.base import ObjectDB
+    from dvc_objects.db import ObjectDB
 
 logger = logging.getLogger(__name__)
 
@@ -79,7 +86,6 @@ def loadd_from(stage, d_list):
         persist = d.pop(Output.PARAM_PERSIST, False)
         checkpoint = d.pop(Output.PARAM_CHECKPOINT, False)
         desc = d.pop(Output.PARAM_DESC, False)
-        isexec = d.pop(Output.PARAM_ISEXEC, False)
         live = d.pop(Output.PARAM_LIVE, False)
         remote = d.pop(Output.PARAM_REMOTE, None)
         ret.append(
@@ -93,7 +99,6 @@ def loadd_from(stage, d_list):
                 persist=persist,
                 checkpoint=checkpoint,
                 desc=desc,
-                isexec=isexec,
                 live=live,
                 remote=remote,
             )
@@ -109,7 +114,6 @@ def loads_from(
     plot=False,
     persist=False,
     checkpoint=False,
-    isexec=False,
     live=False,
     remote=None,
 ):
@@ -123,7 +127,6 @@ def loads_from(
             plot=plot,
             persist=persist,
             checkpoint=checkpoint,
-            isexec=isexec,
             live=live,
             remote=remote,
         )
@@ -255,7 +258,6 @@ class Output:
     PARAM_PLOT_HEADER = "header"
     PARAM_PERSIST = "persist"
     PARAM_DESC = "desc"
-    PARAM_ISEXEC = "isexec"
     PARAM_LIVE = "live"
     PARAM_LIVE_SUMMARY = "summary"
     PARAM_LIVE_HTML = "html"
@@ -287,22 +289,30 @@ class Output:
         checkpoint=False,
         live=False,
         desc=None,
-        isexec=False,
         remote=None,
+        repo=None,
     ):
-        self.repo = stage.repo if stage else None
-
+        self.repo = stage.repo if not repo and stage else repo
         fs_cls, fs_config, fs_path = get_cloud_fs(self.repo, url=path)
         self.fs = fs_cls(**fs_config)
 
         if (
-            self.fs.scheme == "local"
+            self.fs.protocol == "local"
             and stage
+            and isinstance(stage.repo.fs, LocalFileSystem)
             and path_isin(path, stage.repo.root_dir)
         ):
             self.def_path = relpath(path, stage.wdir)
+            self.fs = stage.repo.fs
         else:
             self.def_path = path
+
+        if (
+            self.repo
+            and self.fs.protocol == "local"
+            and not self.fs.path.isabs(self.def_path)
+        ):
+            self.fs = self.repo.fs
 
         self._validate_output_path(path, stage)
         # This output (and dependency) objects have too many paths/urls
@@ -326,16 +336,12 @@ class Output:
         self.desc = desc
 
         self.fs_path = self._parse_path(self.fs, fs_path)
-        if self.use_cache and self.odb is None:
-            raise RemoteCacheRequiredError(self.fs.scheme, self.fs_path)
-
         self.obj = None
-        self.isexec = False if self.IS_DEPENDENCY else isexec
 
         self.remote = remote
 
     def _parse_path(self, fs, fs_path):
-        if fs.scheme != "local":
+        if fs.protocol != "local":
             return fs_path
 
         parsed = urlparse(self.def_path)
@@ -349,7 +355,7 @@ class Output:
             if self.stage and not os.path.isabs(fs_path):
                 fs_path = fs.path.join(self.stage.wdir, fs_path)
 
-        abs_p = os.path.abspath(os.path.normpath(fs_path))
+        abs_p = fs.path.abspath(fs.path.normpath(fs_path))
         return abs_p
 
     def __repr__(self):
@@ -358,7 +364,7 @@ class Output:
         )
 
     def __str__(self):
-        if self.fs.scheme != "local":
+        if self.fs.protocol != "local":
             return self.def_path
 
         if (
@@ -368,29 +374,30 @@ class Output:
         ):
             return str(self.def_path)
 
-        cur_dir = os.getcwd()
-        if path_isin(cur_dir, self.repo.root_dir):
-            return relpath(self.fs_path, cur_dir)
+        cur_dir = self.fs.path.getcwd()
+        if self.fs.path.isin(cur_dir, self.repo.root_dir):
+            return self.fs.path.relpath(self.fs_path, cur_dir)
 
-        return relpath(self.fs_path, self.repo.root_dir)
+        return self.fs.path.relpath(self.fs_path, self.repo.root_dir)
 
     @property
-    def scheme(self):
-        return self.fs.scheme
+    def protocol(self):
+        return self.fs.protocol
 
     @property
     def is_in_repo(self):
-        if self.fs.scheme != "local":
+        if self.fs.protocol != "local":
             return False
 
         if urlparse(self.def_path).scheme == "remote":
             return False
 
-        if os.path.isabs(self.def_path):
+        if self.fs.path.isabs(self.def_path):
             return False
 
-        return self.repo and path_isin(
-            os.path.realpath(self.fs_path), self.repo.root_dir
+        return self.repo and self.fs.path.isin(
+            self.fs.path.realpath(self.fs_path),
+            self.repo.root_dir,
         )
 
     @property
@@ -402,7 +409,10 @@ class Output:
 
     @property
     def odb(self):
-        return getattr(self.repo.odb, self.scheme)
+        odb = getattr(self.repo.odb, self.protocol)
+        if self.use_cache and odb is None:
+            raise RemoteCacheRequiredError(self.fs.protocol, self.fs_path)
+        return odb
 
     @property
     def cache_path(self):
@@ -422,7 +432,7 @@ class Output:
             self.fs_path,
             self.fs,
             name,
-            dvcignore=self.dvcignore,
+            ignore=self.dvcignore,
             dry_run=not self.use_cache,
         )
         return obj.hash_info
@@ -456,7 +466,7 @@ class Output:
             return True
 
         try:
-            objects.check(self.odb, obj)
+            ocheck(self.odb, obj)
             return False
         except (FileNotFoundError, ObjectFormatError):
             return True
@@ -486,7 +496,7 @@ class Output:
 
     @property
     def dvcignore(self):
-        if self.fs.scheme == "local":
+        if self.fs.protocol == "local":
             return self.repo.dvcignore
         return None
 
@@ -544,7 +554,7 @@ class Output:
                 self.fs_path,
                 self.fs,
                 self.fs.PARAM_CHECKSUM,
-                dvcignore=self.dvcignore,
+                ignore=self.dvcignore,
                 dry_run=True,
             )
             self.hash_info = obj.hash_info
@@ -561,14 +571,26 @@ class Output:
             self.fs_path,
             self.fs,
             self.odb.fs.PARAM_CHECKSUM,
-            dvcignore=self.dvcignore,
+            ignore=self.dvcignore,
         )
         self.hash_info = self.obj.hash_info
-        self.isexec = self.isfile() and self.fs.isexec(self.fs_path)
 
     def set_exec(self):
-        if self.isfile() and self.isexec:
+        if self.isfile() and self.meta.isexec:
             self.odb.set_exec(self.fs_path)
+
+    def _checkout(self, *args, **kwargs):
+        from dvc_data.checkout import CheckoutError as _CheckoutError
+        from dvc_data.checkout import LinkError, PromptError
+
+        try:
+            return checkout(*args, **kwargs)
+        except PromptError as exc:
+            raise ConfirmRemoveError(exc.path)
+        except LinkError as exc:
+            raise CacheLinkError([exc.path])
+        except _CheckoutError as exc:
+            raise CheckoutError(exc.paths)
 
     def commit(self, filter_info=None):
         if not self.exists:
@@ -590,7 +612,7 @@ class Output:
                     filter_info or self.fs_path,
                     self.fs,
                     self.odb.fs.PARAM_CHECKSUM,
-                    dvcignore=self.dvcignore,
+                    ignore=self.dvcignore,
                 )
                 otransfer(
                     staging,
@@ -599,14 +621,15 @@ class Output:
                     shallow=False,
                     hardlink=True,
                 )
-            checkout(
+            self._checkout(
                 filter_info or self.fs_path,
                 self.fs,
                 obj,
                 self.odb,
                 relink=True,
-                dvcignore=self.dvcignore,
+                ignore=self.dvcignore,
                 state=self.repo.state,
+                prompt=prompt.confirm,
             )
             self.set_exec()
 
@@ -619,7 +642,7 @@ class Output:
             self.fs_path,
             self.fs,
             self.odb.fs.PARAM_CHECKSUM,
-            dvcignore=self.dvcignore,
+            ignore=self.dvcignore,
         )
         save_obj = save_obj.filter(prefix)
         checkout_obj = save_obj.get(self.odb, prefix)
@@ -672,18 +695,18 @@ class Output:
         if self.checkpoint:
             ret[self.PARAM_CHECKPOINT] = self.checkpoint
 
-        if self.isexec:
-            ret[self.PARAM_ISEXEC] = self.isexec
-
         if self.live:
             ret[self.PARAM_LIVE] = self.live
+
+        if self.remote:
+            ret[self.PARAM_REMOTE] = self.remote
 
         return ret
 
     def verify_metric(self):
-        if self.fs.scheme != "local":
+        if self.fs.protocol != "local":
             raise DvcException(
-                f"verify metric is not supported for {self.scheme}"
+                f"verify metric is not supported for {self.protocol}"
             )
 
         if not self.metric or self.plot:
@@ -703,14 +726,20 @@ class Output:
             raise DvcException(msg.format(self.fs_path, name))
 
     def download(self, to, jobs=None):
-        self.fs.download(self.fs_path, to.fs_path, jobs=jobs)
+        from dvc.fs.callbacks import Callback
+
+        with Callback.as_tqdm_callback(
+            desc=f"Downloading {self.fs.path.name(self.fs_path)}",
+            unit="files",
+        ) as cb:
+            self.fs.get(self.fs_path, to.fs_path, batch_size=jobs, callback=cb)
 
     def get_obj(self, filter_info=None, **kwargs):
         if self.obj:
             obj = self.obj
         elif self.hash_info:
             try:
-                obj = objects.load(self.odb, self.hash_info)
+                obj = oload(self.odb, self.hash_info)
             except FileNotFoundError:
                 return None
         else:
@@ -753,7 +782,7 @@ class Output:
         added = not self.exists
 
         try:
-            modified = checkout(
+            modified = self._checkout(
                 filter_info or self.fs_path,
                 self.fs,
                 obj,
@@ -762,6 +791,7 @@ class Output:
                 progress_callback=progress_callback,
                 relink=relink,
                 state=self.repo.state,
+                prompt=prompt.confirm,
                 **kwargs,
             )
         except CheckoutError:
@@ -773,7 +803,7 @@ class Output:
 
     def remove(self, ignore_remove=False):
         self.fs.remove(self.fs_path)
-        if self.scheme != Schemes.LOCAL:
+        if self.protocol != Schemes.LOCAL:
             return
 
         if ignore_remove:
@@ -781,7 +811,7 @@ class Output:
 
     def move(self, out):
         # pylint: disable=no-member
-        if self.scheme == "local" and self.use_scm_ignore:
+        if self.protocol == "local" and self.use_scm_ignore:
             self.repo.scm_context.ignore_remove(self.fspath)
 
         self.fs.move(self.fs_path, out.fs_path)
@@ -790,7 +820,7 @@ class Output:
         self.save()
         self.commit()
 
-        if self.scheme == "local" and self.use_scm_ignore:
+        if self.protocol == "local" and self.use_scm_ignore:
             self.repo.scm_context.ignore(self.fspath)
 
     def transfer(
@@ -857,7 +887,7 @@ class Output:
 
         obj = self.odb.get(self.hash_info)
         try:
-            objects.check(self.odb, obj)
+            ocheck(self.odb, obj)
         except FileNotFoundError:
             if self.remote:
                 kwargs["remote"] = self.remote
@@ -867,7 +897,7 @@ class Output:
             return self.obj
 
         try:
-            self.obj = objects.load(self.odb, self.hash_info)
+            self.obj = oload(self.odb, self.hash_info)
         except (FileNotFoundError, ObjectFormatError):
             self.obj = None
 
@@ -880,11 +910,13 @@ class Output:
 
         try:
             self.get_dir_cache(jobs=jobs, remote=remote)
+        except RemoteMissingDepsError:  # pylint: disable=try-except-raise
+            raise
         except DvcException:
             logger.debug(f"failed to pull cache for '{self}'")
 
         try:
-            objects.check(self.odb, self.odb.get(self.hash_info))
+            ocheck(self.odb, self.odb.get(self.hash_info))
         except FileNotFoundError:
             msg = (
                 "Missing cache for directory '{}'. "
@@ -985,7 +1017,7 @@ class Output:
                 raise self.IsIgnoredError(check)
 
     def _check_can_merge(self, out):
-        if self.scheme != out.scheme:
+        if self.protocol != out.protocol:
             raise MergeError("unable to auto-merge outputs of different types")
 
         my = self.dumpd()
@@ -1012,7 +1044,8 @@ class Output:
             )
 
     def merge(self, ancestor, other):
-        from dvc.objects.tree import du, merge
+        from dvc_data.tree import MergeError as TreeMergeError
+        from dvc_data.tree import du, merge
 
         assert other
 
@@ -1025,9 +1058,13 @@ class Output:
         self._check_can_merge(self)
         self._check_can_merge(other)
 
-        merged = merge(
-            self.odb, ancestor_info, self.hash_info, other.hash_info
-        )
+        try:
+            merged = merge(
+                self.odb, ancestor_info, self.hash_info, other.hash_info
+            )
+        except TreeMergeError as exc:
+            raise MergeError(str(exc)) from exc
+
         self.odb.add(merged.fs_path, merged.fs, merged.hash_info)
 
         self.hash_info = merged.hash_info
@@ -1061,7 +1098,7 @@ ARTIFACT_SCHEMA = {
     Output.PARAM_CHECKPOINT: bool,
     Meta.PARAM_SIZE: int,
     Meta.PARAM_NFILES: int,
-    Output.PARAM_ISEXEC: bool,
+    Meta.PARAM_ISEXEC: bool,
 }
 
 SCHEMA = {

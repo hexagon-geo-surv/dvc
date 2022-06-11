@@ -11,6 +11,9 @@ import colorama
 import pytest
 
 import dvc as dvc_module
+import dvc_data
+import dvc_objects
+from dvc.cli import main
 from dvc.dvcfile import DVC_FILE_SUFFIX
 from dvc.exceptions import (
     DvcException,
@@ -19,10 +22,8 @@ from dvc.exceptions import (
     OverlappingOutputPathsError,
     RecursiveAddingWhileUsingFilename,
 )
-from dvc.fs.local import LocalFileSystem
-from dvc.hash_info import HashInfo
-from dvc.main import main
-from dvc.objects.db import ODBManager
+from dvc.fs import LocalFileSystem, system
+from dvc.odbmgr import ODBManager
 from dvc.output import (
     OutputAlreadyTrackedError,
     OutputDoesNotExistError,
@@ -33,11 +34,12 @@ from dvc.stage.exceptions import (
     StageExternalOutputsError,
     StagePathNotFoundError,
 )
-from dvc.system import System
 from dvc.testing.test_workspace import TestAdd
-from dvc.utils import LARGE_DIR_SIZE, file_md5, relpath
+from dvc.utils import LARGE_DIR_SIZE, relpath
 from dvc.utils.fs import path_isin
 from dvc.utils.serialize import YAMLFileCorruptedError, load_yaml
+from dvc_objects.hash import file_md5
+from dvc_objects.hash_info import HashInfo
 from tests.basic_env import TestDvc
 from tests.utils import get_gitignore_content
 
@@ -102,7 +104,7 @@ def test_add_unsupported_file(dvc):
 
 
 def test_add_directory(tmp_dir, dvc):
-    from dvc.objects import load
+    from dvc_data import load
 
     (stage,) = tmp_dir.dvc_gen({"dir": {"file": "file"}})
 
@@ -378,7 +380,7 @@ class TestDoubleAddUnchanged(TestDvc):
 
 
 def test_should_update_state_entry_for_file_after_add(mocker, dvc, tmp_dir):
-    file_md5_counter = mocker.spy(dvc_module.objects.stage, "file_md5")
+    file_md5_counter = mocker.spy(dvc_objects.hash, "file_md5")
     tmp_dir.gen("foo", "foo")
 
     ret = main(["config", "cache.type", "copy"])
@@ -409,7 +411,7 @@ def test_should_update_state_entry_for_file_after_add(mocker, dvc, tmp_dir):
 def test_should_update_state_entry_for_directory_after_add(
     mocker, dvc, tmp_dir
 ):
-    file_md5_counter = mocker.spy(dvc_module.objects.stage, "file_md5")
+    file_md5_counter = mocker.spy(dvc_objects.hash, "file_md5")
 
     tmp_dir.gen({"data/data": "foo", "data/data_sub/sub_data": "foo"})
 
@@ -456,7 +458,7 @@ class TestAddCommit(TestDvc):
 
 def test_should_collect_dir_cache_only_once(mocker, tmp_dir, dvc):
     tmp_dir.gen({"data/data": "foo"})
-    counter = mocker.spy(dvc_module.objects.stage, "_stage_tree")
+    counter = mocker.spy(dvc_data.stage, "_stage_tree")
     ret = main(["add", "data"])
     assert ret == 0
     assert counter.mock.call_count == 1
@@ -478,7 +480,7 @@ class TestShouldPlaceStageInDataDirIfRepositoryBelowSymlink(TestDvc):
             return False
 
         with patch.object(
-            System, "is_symlink", side_effect=is_symlink_true_below_dvc_root
+            system, "is_symlink", side_effect=is_symlink_true_below_dvc_root
         ):
 
             ret = main(["add", self.DATA])
@@ -582,7 +584,7 @@ class TestAddUnprotected(TestDvc):
         self.assertEqual(ret, 0)
 
         self.assertFalse(os.access(self.FOO, os.W_OK))
-        self.assertTrue(System.is_hardlink(self.FOO))
+        self.assertTrue(system.is_hardlink(self.FOO))
 
         ret = main(["unprotect", self.FOO])
         self.assertEqual(ret, 0)
@@ -591,7 +593,7 @@ class TestAddUnprotected(TestDvc):
         self.assertEqual(ret, 0)
 
         self.assertFalse(os.access(self.FOO, os.W_OK))
-        self.assertTrue(System.is_hardlink(self.FOO))
+        self.assertTrue(system.is_hardlink(self.FOO))
 
 
 @pytest.fixture
@@ -663,7 +665,7 @@ def test_readding_dir_should_not_unprotect_all(tmp_dir, dvc, mocker):
     dvc.add("dir")
 
     assert not unprotect_spy.mock.called
-    assert System.is_symlink(os.path.join("dir", "new_file"))
+    assert system.is_symlink(os.path.join("dir", "new_file"))
 
 
 def test_should_not_checkout_when_adding_cached_copy(tmp_dir, dvc, mocker):
@@ -683,10 +685,10 @@ def test_should_not_checkout_when_adding_cached_copy(tmp_dir, dvc, mocker):
 @pytest.mark.parametrize(
     "link,new_link,link_test_func",
     [
-        ("hardlink", "copy", lambda path: not System.is_hardlink(path)),
-        ("symlink", "copy", lambda path: not System.is_symlink(path)),
-        ("copy", "hardlink", System.is_hardlink),
-        ("copy", "symlink", System.is_symlink),
+        ("hardlink", "copy", lambda path: not system.is_hardlink(path)),
+        ("symlink", "copy", lambda path: not system.is_symlink(path)),
+        ("copy", "hardlink", system.is_hardlink),
+        ("copy", "symlink", system.is_symlink),
     ],
 )
 def test_should_relink_on_repeated_add(
@@ -783,16 +785,16 @@ def test_add_optimization_for_hardlink_on_empty_files(tmp_dir, dvc, mocker):
     m = mocker.spy(LocalFileSystem, "is_hardlink")
     stages = dvc.add(["foo", "bar", "lorem", "ipsum"])
 
-    assert m.call_count == 4
+    assert m.call_count == 8
     assert m.call_args != call(tmp_dir / "foo")
     assert m.call_args != call(tmp_dir / "bar")
 
     for stage in stages[:2]:
         # hardlinks are not created for empty files
-        assert not System.is_hardlink(stage.outs[0].fs_path)
+        assert not system.is_hardlink(stage.outs[0].fs_path)
 
     for stage in stages[2:]:
-        assert System.is_hardlink(stage.outs[0].fs_path)
+        assert system.is_hardlink(stage.outs[0].fs_path)
 
     for stage in stages:
         assert os.path.exists(stage.path)
@@ -880,7 +882,7 @@ def test_add_with_cache_link_error(tmp_dir, dvc, mocker, capsys):
     tmp_dir.gen("foo", "foo")
 
     mocker.patch(
-        "dvc.objects.checkout.test_links",
+        "dvc_data.checkout.test_links",
         return_value=[],
     )
     dvc.add("foo")
@@ -894,7 +896,7 @@ def test_add_with_cache_link_error(tmp_dir, dvc, mocker, capsys):
     }
 
 
-def test_add_preserve_meta(tmp_dir, dvc):
+def test_add_preserve_fields(tmp_dir, dvc):
     text = textwrap.dedent(
         """\
         # top comment
@@ -902,11 +904,11 @@ def test_add_preserve_meta(tmp_dir, dvc):
         outs:
         - path: foo # out comment
           desc: out desc
+          remote: testremote
         meta: some metadata
     """
     )
     tmp_dir.gen("foo.dvc", text)
-
     tmp_dir.dvc_gen("foo", "foo")
     assert (tmp_dir / "foo.dvc").read_text() == textwrap.dedent(
         """\
@@ -915,6 +917,7 @@ def test_add_preserve_meta(tmp_dir, dvc):
         outs:
         - path: foo # out comment
           desc: out desc
+          remote: testremote
           md5: acbd18db4cc2f85cedef654fccc4a4d8
           size: 3
         meta: some metadata
@@ -1031,6 +1034,13 @@ def test_add_to_cache_file(tmp_dir, dvc, local_cloud):
     status = dvc.checkout(str(foo))
     assert status["added"] == ["foo"]
     assert foo.read_text() == "foo"
+
+
+def test_add_with_out(tmp_dir, scm, dvc):
+    tmp_dir.gen({"foo": "foo"})
+    dvc.add("foo", out="out_foo")
+    gitignore_content = get_gitignore_content()
+    assert "/out_foo" in gitignore_content
 
 
 def test_add_to_cache_different_name(tmp_dir, dvc, local_cloud):

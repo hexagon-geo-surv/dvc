@@ -17,12 +17,7 @@ from typing import (
 from funcy import cached_property, first, project
 
 from dvc.exceptions import DvcException
-from dvc.utils import (
-    error_handler,
-    errored_revisions,
-    onerror_collect,
-    relpath,
-)
+from dvc.utils import error_handler, errored_revisions, onerror_collect
 from dvc.utils.serialize import LOADERS
 
 if TYPE_CHECKING:
@@ -50,6 +45,11 @@ class NotAPlotError(DvcException):
 
 class PropsNotFoundError(DvcException):
     pass
+
+
+@error_handler
+def _unpack_dir_files(fs, path, **kwargs):
+    return list(fs.find(path))
 
 
 class Plots:
@@ -99,18 +99,32 @@ class Plots:
         onerror: Optional[Callable] = None,
         props: Optional[Dict] = None,
     ):
-        from dvc.fs.repo import RepoFileSystem
+        from dvc.fs.dvc import DvcFileSystem
 
-        fs = RepoFileSystem(self.repo)
+        fs = DvcFileSystem(repo=self.repo)
         plots = _collect_plots(self.repo, targets, revision, recursive)
         res: Dict[str, Any] = {}
         for fs_path, rev_props in plots.items():
+            base = os.path.join(*fs.path.relparts(fs_path, fs.fs.root_marker))
             if fs.isdir(fs_path):
                 plot_files = []
-                for pi in fs.find(fs_path):
-                    plot_files.append((pi, relpath(pi, self.repo.root_dir)))
+                unpacking_res = _unpack_dir_files(fs, fs_path, onerror=onerror)
+                if "data" in unpacking_res:
+                    for pi in unpacking_res.get(  # pylint: disable=E1101
+                        "data"
+                    ):
+                        plot_files.append(
+                            (
+                                pi,
+                                os.path.join(
+                                    base, *fs.path.relparts(pi, fs_path)
+                                ),
+                            )
+                        )
+                else:
+                    res[base] = unpacking_res
             else:
-                plot_files = [(fs_path, relpath(fs_path, self.repo.root_dir))]
+                plot_files = [(fs_path, base)]
 
             props = props or {}
 
@@ -183,11 +197,12 @@ class Plots:
 
     def modify(self, path, props=None, unset=None):
         from dvc.dvcfile import Dvcfile
+        from dvc_render.vega_templates import get_template
 
         props = props or {}
         template = props.get("template")
         if template:
-            self.templates.get_template(template)
+            get_template(template, self.templates_dir)
 
         (out,) = self.repo.find_outs_by_path(path)
         if not out.plot and unset is not None:
@@ -212,10 +227,9 @@ class Plots:
         dvcfile.dump(out.stage, update_lock=False)
 
     @cached_property
-    def templates(self):
-        from .template import PlotTemplates
-
-        return PlotTemplates(self.repo.dvc_dir)
+    def templates_dir(self):
+        if self.repo.dvc_dir:
+            return os.path.join(self.repo.dvc_dir, "plots")
 
 
 def _is_plot(out: "Output") -> bool:
@@ -227,7 +241,7 @@ def _collect_plots(
     targets: List[str] = None,
     rev: str = None,
     recursive: bool = False,
-) -> Dict["List[str]", Dict]:
+) -> Dict[str, Dict]:
     from dvc.repo.collect import collect
 
     plots, fs_paths = collect(
@@ -238,7 +252,10 @@ def _collect_plots(
         recursive=recursive,
     )
 
-    result = {plot.fs_path: _plot_props(plot) for plot in plots}
+    result = {
+        repo.dvcfs.from_os_path(plot.fs_path): _plot_props(plot)
+        for plot in plots
+    }
     result.update({fs_path: {} for fs_path in fs_paths})
     return result
 

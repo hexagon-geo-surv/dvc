@@ -8,31 +8,40 @@
 • `Tutorial <https://dvc.org/doc/get-started>`_
 • `Mailing List <https://sweedom.us10.list-manage.com/subscribe/post?u=a08bf93caae4063c4e6a351f6&id=24c0ecc49a>`_
 
-|CI| |Maintainability| |Coverage| |Donate| |DOI|
+|CI| |Maintainability| |Coverage| |DOI|
 
 |PyPI| |Packages| |Brew| |Conda| |Choco| |Snap|
 
 |
 
-**Data Version Control** or **DVC** is an **open-source** tool for data science and machine
-learning projects. Key features:
+**Data Version Control** or **DVC** helps you develop reproducible machine
+learning projects:
 
-#. Simple **command line** Git-like experience. Does not require installing and maintaining
-   any databases. Does not depend on any proprietary online services.
+#. Version your data and models.
 
-#. Management and versioning of **datasets** and **machine learning
-   models**. Data can be saved in S3, Google cloud, Azure, Alibaba 
-   cloud, SSH server, HDFS, or even local HDD RAID.
+#. Connect them to your code and parameters to form a pipeline.
 
-#. Makes projects **reproducible** and **shareable**; helping to answer questions about how
-   a model was built.
+#. Modify data, code, or parameters and run your modified pipeline.
 
-#. Helps manage experiments with Git tags/branches and **metrics** tracking.
+#. Iterate and track each experiment.
 
-**DVC** aims to replace spreadsheet and document sharing tools (such as Excel or Google Docs)
-frequently used as both knowledge repositories and team ledgers.
-DVC also replaces both ad-hoc scripts to track, move, and deploy different model versions
-and ad-hoc data file suffixes and prefixes.
+#. Share, compare, and reconstruct experiments.
+
+**Why DVC?**
+
+#. **Store** data and models (big) in your cloud storage, but keep their version
+   info (small) in your Git repo.
+
+#. **Iterate** fast with straightforward YAML pipelines. When you make changes,
+   only run the steps impacted by those changes.
+
+#. **Track** experiments in your local Git repo (no servers needed) and choose
+   which to keep and share.
+
+#. **Compare** any data, code, parameters, metrics, or plots and analyze however
+   you want.
+
+#. **Reconstruct** anyone's experiment with a single command.
 
 .. contents:: **Contents**
   :backlinks: none
@@ -103,7 +112,7 @@ Snap (Snapcraft/Linux)
 
 This corresponds to the latest tagged release.
 Add ``--beta`` for the latest tagged release candidate,
-or ``--edge`` for the latest ``master`` version.
+or ``--edge`` for the latest ``main`` version.
 
 Choco (Chocolatey/Windows)
 --------------------------
@@ -169,22 +178,24 @@ Ubuntu / Debian (deb)
 .. code-block:: bash
 
    sudo wget https://dvc.org/deb/dvc.list -O /etc/apt/sources.list.d/dvc.list
-   sudo apt-get update
-   sudo apt-get install dvc
+   wget -qO - https://dvc.org/deb/iterative.asc | sudo apt-key add -
+   sudo apt update
+   sudo apt install dvc
 
 Fedora / CentOS (rpm)
 ^^^^^^^^^^^^^^^^^^^^^
 .. code-block:: bash
 
    sudo wget https://dvc.org/rpm/dvc.repo -O /etc/yum.repos.d/dvc.repo
+   sudo rpm --import https://dvc.org/rpm/iterative.asc
    sudo yum update
    sudo yum install dvc
 
 Comparison to related technologies
 ==================================
 
-#. Data Engineering tools such as `AirFlow <https://airflow.apache.org/>`,
-   `Luigi <https://github.com/spotify/luigi>`, and others - in DVC data,
+#. Data Engineering tools such as `AirFlow <https://airflow.apache.org/>`_,
+   `Luigi <https://github.com/spotify/luigi>`_, and others - in DVC data,
    model and ML pipelines represent a single ML project focused on data
    scientists' experience.  Data engineering tools orchestrate multiple data
    projects and focus on efficient execution. A DVC project can be used from
@@ -212,14 +223,14 @@ Comparison to related technologies
 #. `DVC Studio <https://studio.iterative.ai/>`_ - official online
    platform for DVC projects.  It can be used to manage data and models, run
    and track experiments, and visualize and share results.  Also, it
-   integrates with `CML (CI/CD for ML) <https://cml.dev/>` for training
+   integrates with `CML (CI/CD for ML) <https://cml.dev/>`__ for training
    models in the cloud or Kubernetes.
 
 
 Contributing
 ============
 
-|Maintainability| |Donate|
+|Maintainability|
 
 Contributions are welcome! Please see our `Contributing Guide <https://dvc.org/doc/user-guide/contributing/core>`_ for more
 details. Thanks to all our contributors!
@@ -254,7 +265,7 @@ Barrak, A., Eghan, E.E. and Adams, B. `On the Co-evolution of ML Pipelines and S
    :target: https://dvc.org
    :alt: DVC logo
 
-.. |CI| image:: https://github.com/iterative/dvc/workflows/Tests/badge.svg?branch=master
+.. |CI| image:: https://github.com/iterative/dvc/workflows/Tests/badge.svg?branch=main
    :target: https://github.com/iterative/dvc/actions
    :alt: GHA Tests
 
@@ -262,13 +273,9 @@ Barrak, A., Eghan, E.E. and Adams, B. `On the Co-evolution of ML Pipelines and S
    :target: https://codeclimate.com/github/iterative/dvc
    :alt: Code Climate
 
-.. |Coverage| image:: https://codecov.io/gh/iterative/dvc/branch/master/graph/badge.svg
+.. |Coverage| image:: https://codecov.io/gh/iterative/dvc/branch/main/graph/badge.svg
    :target: https://codecov.io/gh/iterative/dvc
    :alt: Codecov
-
-.. |Donate| image:: https://img.shields.io/badge/patreon-donate-green.svg?logo=patreon
-   :target: https://www.patreon.com/DVCorg/overview
-   :alt: Donate
 
 .. |Snap| image:: https://img.shields.io/badge/snap-install-82BEA0.svg?logo=snapcraft
    :target: https://snapcraft.io/dvc

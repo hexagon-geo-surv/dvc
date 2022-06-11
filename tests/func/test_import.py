@@ -4,15 +4,16 @@ from unittest.mock import patch
 
 import pytest
 from funcy import first
+from scmrepo.git import Git
 
 from dvc.config import NoRemoteError
 from dvc.dvcfile import Dvcfile
 from dvc.exceptions import DownloadError, PathMissingError
-from dvc.objects.db import ODBManager
+from dvc.fs import system
+from dvc.odbmgr import ODBManager
 from dvc.stage.exceptions import StagePathNotFoundError
-from dvc.system import System
 from dvc.utils.fs import makedirs, remove
-from tests.unit.fs.test_repo import make_subrepo
+from tests.unit.fs.test_dvc import make_subrepo
 from tests.utils import clean_staging
 
 
@@ -226,11 +227,11 @@ def test_cache_type_is_properly_overridden(tmp_dir, scm, dvc, erepo_dir):
             "set source repo cache type to symlink",
         )
         erepo_dir.dvc_gen("foo", "foo content", "create foo")
-    assert System.is_symlink(erepo_dir / "foo")
+    assert system.is_symlink(erepo_dir / "foo")
 
     dvc.imp(os.fspath(erepo_dir), "foo", "foo_imported")
 
-    assert not System.is_symlink("foo_imported")
+    assert not system.is_symlink("foo_imported")
     assert (tmp_dir / "foo_imported").read_text() == "foo content"
     assert scm.is_ignored("foo_imported")
 
@@ -268,9 +269,7 @@ def test_pull_wildcard_imported_directory_stage(tmp_dir, dvc, erepo_dir):
 def test_push_wildcard_from_bare_git_repo(
     tmp_dir, make_tmp_dir, erepo_dir, local_cloud
 ):
-    import git
-
-    git.Repo.init(os.fspath(tmp_dir), bare=True)
+    Git.init(tmp_dir.fs_path, bare=True).close()
 
     erepo_dir.add_remote(config=local_cloud.config)
     with erepo_dir.chdir():
@@ -308,9 +307,9 @@ def test_download_error_pulling_imported_stage(tmp_dir, dvc, erepo_dir):
     remove("foo_imported")
     remove(dst_cache)
 
-    with patch("dvc.fs.utils.transfer", side_effect=Exception), pytest.raises(
-        DownloadError
-    ):
+    with patch(
+        "dvc_objects.fs.generic.transfer", side_effect=Exception
+    ), pytest.raises(DownloadError):
         dvc.pull(["foo_imported.dvc"])
 
 
@@ -381,9 +380,7 @@ def test_pull_no_rev_lock(erepo_dir, tmp_dir, dvc):
 def test_import_from_bare_git_repo(
     tmp_dir, make_tmp_dir, erepo_dir, local_cloud
 ):
-    import git
-
-    git.Repo.init(os.fspath(tmp_dir), bare=True)
+    Git.init(tmp_dir.fs_path, bare=True).close()
 
     erepo_dir.add_remote(config=local_cloud.config)
     with erepo_dir.chdir():
@@ -411,7 +408,7 @@ def test_import_pipeline_tracked_outs(
     dvc.scm.commit("add pipeline stage")
 
     with erepo_dir.chdir():
-        erepo_dir.dvc.imp(f"file:///{os.fspath(tmp_dir)}", "bar", out="baz")
+        erepo_dir.dvc.imp(f"file://{tmp_dir.as_posix()}", "bar", out="baz")
         assert (erepo_dir / "baz").read_text() == "foo"
 
 
@@ -532,7 +529,7 @@ def test_import_with_no_exec(tmp_dir, dvc, erepo_dir):
 
 
 def test_import_with_jobs(mocker, dvc, erepo_dir):
-    import dvc.objects.transfer as otransfer
+    import dvc_data.transfer as otransfer
 
     with erepo_dir.chdir():
         erepo_dir.dvc_gen(
@@ -603,3 +600,33 @@ def test_circular_import(tmp_dir, dvc, scm, erepo_dir):
             erepo_dir.dvc.imp(
                 os.fspath(tmp_dir), "dir_imported", "circular_import"
             )
+
+
+@pytest.mark.parametrize("paths", ([], ["dir"]))
+def test_parameterized_repo(tmp_dir, dvc, scm, erepo_dir, paths):
+    path = erepo_dir.joinpath(*paths)
+    path.mkdir(parents=True, exist_ok=True)
+    (path / "params.yaml").dump({"out": "foo"})
+    (path / "dvc.yaml").dump(
+        {
+            "stages": {
+                "train": {"cmd": "echo ${out} > ${out}", "outs": ["${out}"]},
+            }
+        }
+    )
+    path.gen({"foo": "foo"})
+    with path.chdir():
+        erepo_dir.dvc.commit(None, force=True)
+        erepo_dir.scm.add_commit(
+            ["params.yaml", "dvc.yaml", "dvc.lock", ".gitignore"],
+            message="init",
+        )
+
+    to_import = os.path.join(*paths, "foo")
+    stage = dvc.imp(os.fspath(erepo_dir), to_import, "foo_imported")
+
+    assert (tmp_dir / "foo_imported").read_text() == "foo"
+    assert stage.deps[0].def_repo == {
+        "url": os.fspath(erepo_dir),
+        "rev_lock": erepo_dir.scm.get_rev(),
+    }

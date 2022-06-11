@@ -6,12 +6,12 @@ import configobj
 import pytest
 from git import Repo
 
+from dvc.cli import main
 from dvc.exceptions import CollectCacheError
-from dvc.fs.local import LocalFileSystem
-from dvc.main import main
-from dvc.objects.db.local import LocalObjectDB
+from dvc.fs import LocalFileSystem
 from dvc.repo import Repo as DvcRepo
 from dvc.utils.fs import remove
+from dvc_data.db.local import LocalObjectDB
 from tests.basic_env import TestDir, TestDvcGit
 
 
@@ -20,13 +20,16 @@ class TestGC(TestDvcGit):
         super().setUp()
 
         self.dvc.add(self.FOO)
-        self.dvc.add(self.DATA_DIR)
+        stages = self.dvc.add(self.DATA_DIR)
+        raw_dir_hash = stages[0].outs[0].hash_info.as_raw().value
+
         self.good_cache = [
             self.dvc.odb.local.hash_to_path(md5)
             for md5 in self.dvc.odb.local.all()
+            if md5 != raw_dir_hash
         ]
 
-        self.bad_cache = []
+        self.bad_cache = [self.dvc.odb.local.hash_to_path(raw_dir_hash)]
         for i in ["123", "234", "345"]:
             path = os.path.join(self.dvc.odb.local.cache_dir, i[0:2], i[2:])
             self.create(path, i)
@@ -203,7 +206,7 @@ def test_gc_no_dir_cache(tmp_dir, dvc):
     with pytest.raises(CollectCacheError):
         dvc.gc(workspace=True)
 
-    assert _count_files(dvc.odb.local.cache_dir) == 4
+    assert _count_files(dvc.odb.local.cache_dir) == 5
     dvc.gc(force=True, workspace=True)
     assert _count_files(dvc.odb.local.cache_dir) == 2
 

@@ -4,7 +4,7 @@ import os
 import pytest
 
 from dvc.cli import parse_args
-from dvc.command.diff import _digest, _show_markdown
+from dvc.commands.diff import _digest, _show_markdown
 
 
 @pytest.mark.parametrize(
@@ -197,27 +197,38 @@ def test_diff_show_markdown_and_hash(mocker, show_hash):
 
     diff = {}
     show_hash = show_hash if show_hash else False
-    mock_show_markdown = mocker.patch("dvc.command.diff._show_markdown")
+    mock_show_markdown = mocker.patch("dvc.commands.diff._show_markdown")
     mocker.patch("dvc.repo.Repo.diff", return_value=diff.copy())
 
     assert 0 == cmd.run()
     mock_show_markdown.assert_called_once_with(diff, show_hash, False)
 
 
-def test_no_changes(mocker, capsys):
-    args = parse_args(["diff", "--json"])
+@pytest.mark.parametrize(
+    "opts",
+    (
+        [],
+        ["a_rev", "b_rev"],
+        ["--targets", "."],
+        ["--hide-missing"],
+    ),
+)
+@pytest.mark.parametrize(
+    "show, expected",
+    (
+        ([], ""),
+        (["--json"], "{}"),
+        (["--md"], "| Status   | Path   |\n|----------|--------|"),
+    ),
+)
+def test_no_changes(mocker, capsys, opts, show, expected):
+    args = parse_args(["diff", *opts, *show])
     cmd = args.func(args)
     mocker.patch("dvc.repo.Repo.diff", return_value={})
 
     assert 0 == cmd.run()
     out, _ = capsys.readouterr()
-    assert "{}" in out
-
-    args = parse_args(["diff"])
-    cmd = args.func(args)
-    assert 0 == cmd.run()
-    out, _ = capsys.readouterr()
-    assert not out
+    assert expected == out.strip()
 
 
 def test_show_markdown(capsys):

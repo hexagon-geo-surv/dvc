@@ -3,11 +3,12 @@
 import logging
 from typing import TYPE_CHECKING, Iterable, Optional
 
-from dvc.objects.db import get_index
+from dvc_data.db import get_index
 
 if TYPE_CHECKING:
-    from dvc.hash_info import HashInfo
-    from dvc.objects.db.base import ObjectDB
+    from dvc_data.status import CompareStatusResult
+    from dvc_objects.db import ObjectDB
+    from dvc_objects.hash_info import HashInfo
 
 logger = logging.getLogger(__name__)
 
@@ -56,11 +57,37 @@ class DataCloud:
 
     def _init_odb(self, name):
         from dvc.fs import get_cloud_fs
-        from dvc.objects.db import get_odb
+        from dvc_data.db import get_odb
 
         cls, config, fs_path = get_cloud_fs(self.repo, name=name)
         config["tmp_dir"] = self.repo.index_db_dir
         return get_odb(cls(**config), fs_path, **config)
+
+    def _log_missing(self, status: "CompareStatusResult"):
+        if status.missing:
+            missing_desc = "\n".join(
+                f"name: {hash_info.obj_name}, {hash_info}"
+                for hash_info in status.missing
+            )
+            logger.warning(
+                "Some of the cache files do not exist neither locally "
+                f"nor on remote. Missing cache files:\n{missing_desc}"
+            )
+
+    def transfer(
+        self,
+        src_odb: "ObjectDB",
+        dest_odb: "ObjectDB",
+        objs: Iterable["HashInfo"],
+        **kwargs,
+    ):
+        from dvc.exceptions import FileTransferError
+        from dvc_data.transfer import TransferError, transfer
+
+        try:
+            return transfer(src_odb, dest_odb, objs, **kwargs)
+        except TransferError as exc:
+            raise FileTransferError(exc.fails) from exc
 
     def push(
         self,
@@ -78,17 +105,15 @@ class DataCloud:
                 By default remote from core.remote config option is used.
             odb: optional ODB to push to. Overrides remote.
         """
-        from dvc.objects.transfer import transfer
-
-        if not odb:
-            odb = self.get_remote_odb(remote, "push")
-        return transfer(
+        odb = odb or self.get_remote_odb(remote, "push")
+        return self.transfer(
             self.repo.odb.local,
             odb,
             objs,
             jobs=jobs,
             dest_index=get_index(odb),
             cache_odb=self.repo.odb.local,
+            validate_status=self._log_missing,
         )
 
     def pull(
@@ -107,11 +132,8 @@ class DataCloud:
                 By default remote from core.remote config option is used.
             odb: optional ODB to pull from. Overrides remote.
         """
-        from dvc.objects.transfer import transfer
-
-        if not odb:
-            odb = self.get_remote_odb(remote, "pull")
-        return transfer(
+        odb = odb or self.get_remote_odb(remote, "pull")
+        return self.transfer(
             odb,
             self.repo.odb.local,
             objs,
@@ -119,6 +141,7 @@ class DataCloud:
             src_index=get_index(odb),
             cache_odb=self.repo.odb.local,
             verify=odb.verify,
+            validate_status=self._log_missing,
         )
 
     def status(
@@ -141,7 +164,7 @@ class DataCloud:
             log_missing: log warning messages if file doesn't exist
                 neither in cache, neither in cloud.
         """
-        from dvc.objects.status import compare_status
+        from dvc_data.status import compare_status
 
         if not odb:
             odb = self.get_remote_odb(remote, "status")

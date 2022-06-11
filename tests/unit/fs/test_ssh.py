@@ -2,11 +2,11 @@
 
 import getpass
 import os
+from unittest.mock import mock_open, patch
 
 import pytest
-from mock import mock_open, patch
 
-from dvc.fs.ssh import SSHFileSystem
+from dvc.fs import DEFAULT_SSH_PORT, SSHFileSystem
 
 
 def test_get_kwargs_from_urls():
@@ -44,7 +44,9 @@ def test_init():
 
 
 def test_ssh_ask_password(mocker):
-    mocker.patch("dvc.fs.ssh.ask_password", return_value="fish")
+    mocker.patch(
+        "dvc_objects.fs.implementations.ssh.ask_password", return_value="fish"
+    )
     fs = SSHFileSystem(user="test", host="2.2.2.2", ask_password=True)
     assert fs.fs_args["password"] == fs.fs_args["passphrase"] == "fish"
 
@@ -99,7 +101,7 @@ def test_ssh_user(mock_file, config, expected_user):
     [
         ({"host": "example.com"}, 1234),
         ({"host": "example.com", "port": 4321}, 4321),
-        ({"host": "not_in_ssh_config.com"}, SSHFileSystem.DEFAULT_PORT),
+        ({"host": "not_in_ssh_config.com"}, DEFAULT_SSH_PORT),
         ({"host": "not_in_ssh_config.com", "port": 2222}, 2222),
     ],
 )
@@ -122,7 +124,7 @@ def test_ssh_port(mock_file, config, expected_port):
         ),
         (
             {"host": "example.com"},
-            [os.path.expanduser("~/.ssh/not_default.key")],
+            ["~/.ssh/not_default.key"],
         ),
         (
             {
@@ -141,7 +143,12 @@ def test_ssh_port(mock_file, config, expected_port):
 )
 def test_ssh_keyfile(mock_file, config, expected_keyfile):
     fs = SSHFileSystem(**config)
-    assert fs.fs_args.get("client_keys") == expected_keyfile
+    expected_keyfiles = (
+        [os.path.expanduser(path) for path in expected_keyfile]
+        if expected_keyfile
+        else expected_keyfile
+    )
+    assert fs.fs_args.get("client_keys") == expected_keyfiles
 
 
 mock_ssh_multi_key_config = """

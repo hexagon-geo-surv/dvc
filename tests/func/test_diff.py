@@ -33,6 +33,28 @@ def test_added(tmp_dir, scm, dvc):
     }
 
 
+def test_added_deep(tmp_dir, scm, dvc):
+    tmp_dir.gen({"datas": {"data": {"file": "text"}}})
+    dvc.add(os.path.join("datas", "data"))
+
+    assert dvc.diff() == {
+        "added": [
+            {
+                "path": os.path.join("datas", "data" + os.sep),
+                "hash": "0dab3fae569586d4c33272e5011605bf.dir",
+            },
+            {
+                "path": os.path.join("datas", "data", "file"),
+                "hash": "1cb251ec0d568de6a929b520c4aed8d1",
+            },
+        ],
+        "deleted": [],
+        "modified": [],
+        "not in cache": [],
+        "renamed": [],
+    }
+
+
 def test_no_cache_entry(tmp_dir, scm, dvc):
     tmp_dir.dvc_gen("file", "first", commit="add a file")
 
@@ -93,6 +115,37 @@ def test_modified(tmp_dir, scm, dvc):
         "not in cache": [],
         "renamed": [],
     }
+
+
+def test_modified_subrepo(tmp_dir, scm, dvc):
+    from dvc.repo import Repo
+
+    tmp_dir.gen({"subdir": {"file": "first"}})
+    subrepo_dir = tmp_dir / "subdir"
+
+    with subrepo_dir.chdir():
+        subrepo = Repo.init(subdir=True)
+        subrepo.add("file")
+
+    scm.add(os.path.join("subdir", "file.dvc"))
+    scm.commit("init")
+
+    (subrepo_dir / "file").write_text("second")
+
+    with subrepo_dir.chdir():
+        subrepo = Repo()
+        assert subrepo.diff() == {
+            "added": [],
+            "deleted": [],
+            "modified": [
+                {
+                    "path": "file",
+                    "hash": {"old": digest("first"), "new": digest("second")},
+                }
+            ],
+            "not in cache": [],
+            "renamed": [],
+        }
 
 
 def test_refs(tmp_dir, scm, dvc):
@@ -271,10 +324,9 @@ def test_no_commits(tmp_dir):
     from scmrepo.git import Git
 
     from dvc.repo import Repo
-    from tests.dir_helpers import git_init
 
-    git_init(".")
-    assert Git().no_commits
+    git = Git.init(tmp_dir.fs_path)
+    assert git.no_commits
 
     assert Repo.init().diff() == {}
 

@@ -1,6 +1,4 @@
-from functools import partial
-
-from funcy import group_by
+from dvc.scm import iter_revs
 
 
 def brancher(  # noqa: E302
@@ -31,47 +29,56 @@ def brancher(  # noqa: E302
         yield ""
         return
 
-    from dvc.fs.local import LocalFileSystem
+    from dvc.fs import LocalFileSystem
+
+    repo_root_parts = ()
+    if self.fs.path.isin(self.root_dir, self.scm.root_dir):
+        repo_root_parts = self.fs.path.relparts(
+            self.root_dir, self.scm.root_dir
+        )
+
+    cwd_parts = ()
+    if self.fs.path.isin(self.fs.path.getcwd(), self.scm.root_dir):
+        cwd_parts = self.fs.path.relparts(
+            self.fs.path.getcwd(), self.scm.root_dir
+        )
 
     saved_fs = self.fs
-    revs = revs.copy() if revs else []
+    saved_root = self.root_dir
 
     scm = self.scm
 
     self.fs = LocalFileSystem(url=self.root_dir)
     yield "workspace"
 
-    if revs and "workspace" in revs:
+    revs = revs.copy() if revs else []
+    if "workspace" in revs:
         revs.remove("workspace")
 
-    if all_commits:
-        revs = scm.list_all_commits()
-    else:
-        if all_branches:
-            revs.extend(scm.list_branches())
-
-        if all_tags:
-            revs.extend(scm.list_tags())
-
-    if all_experiments:
-        from dvc.repo.experiments.utils import exp_commits
-
-        revs.extend(exp_commits(scm))
+    found_revs = iter_revs(
+        scm,
+        revs,
+        all_branches=all_branches,
+        all_tags=all_tags,
+        all_commits=all_commits,
+        all_experiments=all_experiments,
+    )
 
     try:
-        if revs:
-            from dvc.fs.git import GitFileSystem
-            from dvc.scm import resolve_rev
+        from dvc.fs import GitFileSystem
 
-            rev_resolver = partial(resolve_rev, scm)
-            for sha, names in group_by(rev_resolver, revs).items():
-                self.fs = GitFileSystem(scm=scm, rev=sha)
-                # ignore revs that don't contain repo root
-                # (i.e. revs from before a subdir=True repo was init'ed)
-                if self.fs.exists(self.root_dir):
-                    if sha_only:
-                        yield sha
-                    else:
-                        yield ", ".join(names)
+        for sha, names in found_revs.items():
+            self.fs = GitFileSystem(scm=scm, rev=sha)
+            self.root_dir = self.fs.path.join("/", *repo_root_parts)
+
+            if cwd_parts:
+                cwd = self.fs.path.join("/", *cwd_parts)
+                self.fs.path.chdir(cwd)
+
+            # ignore revs that don't contain repo root
+            # (i.e. revs from before a subdir=True repo was init'ed)
+            if self.fs.exists(self.root_dir):
+                yield sha if sha_only else ",".join(names)
     finally:
         self.fs = saved_fs
+        self.root_dir = saved_root

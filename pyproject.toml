@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=48", "wheel", "setuptools_scm[toml]>=6.3.1"]
+requires = ["setuptools>=48", "setuptools_scm[toml]>=6.3.1", "setuptools_scm_git_archive==1.1"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools_scm]
@@ -25,7 +25,7 @@ exclude = '''
 
 [tool.isort]
 profile = "black"
-known_first_party = ["dvc", "tests"]
+known_first_party = ["dvc", "dvc_data", "dvc_objects", "dvc_render", "tests"]
 line_length = 79
 
 [tool.pytest.ini_options]
@@ -33,7 +33,10 @@ log_level = "debug"
 addopts = "-ra"
 markers = [
     "needs_internet: Might need network access for the tests",
+"vscode: Tests verifying contract between DVC and VSCode plugin",
+"studio: Tests verifying contract between DVC and Studio"
 ]
+xfail_strict = true
 
 [tool.mypy]
 # Error output
@@ -65,6 +68,7 @@ disable = [
     "logging-format-interpolation", "logging-fstring-interpolation",
     "missing-function-docstring", "missing-module-docstring",
     "missing-class-docstring", "raise-missing-from", "import-outside-toplevel",
+    "cannot-enumerate-pytest-fixtures",
 ]
 enable = ["c-extension-no-member", "no-else-return"]
 

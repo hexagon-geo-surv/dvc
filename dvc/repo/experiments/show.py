@@ -1,16 +1,16 @@
 import logging
 from collections import OrderedDict, defaultdict
 from datetime import datetime
-from typing import Any, Callable, Dict, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Union
 
-from dvc.exceptions import InvalidArgumentError
-from dvc.repo import locked
 from dvc.repo.experiments.base import ExpRefInfo
-from dvc.repo.experiments.executor.base import ExecutorInfo
-from dvc.repo.experiments.utils import fix_exp_head
 from dvc.repo.metrics.show import _gather_metrics
 from dvc.repo.params.show import _gather_params
-from dvc.utils import error_handler, onerror_collect
+from dvc.scm import iter_revs
+from dvc.utils import error_handler, onerror_collect, relpath
+
+if TYPE_CHECKING:
+    from dvc.repo import Repo
 
 logger = logging.getLogger(__name__)
 
@@ -24,7 +24,10 @@ def _collect_experiment_commit(
     param_deps=False,
     running=None,
     onerror: Optional[Callable] = None,
+    is_baseline: bool = False,
 ):
+    from dvc.dependency import ParamsDependency, RepoDependency
+
     res: Dict[str, Optional[Any]] = defaultdict(dict)
     for rev in repo.brancher(revs=[exp_rev]):
         if rev == "workspace":
@@ -41,10 +44,31 @@ def _collect_experiment_commit(
         if params:
             res["params"] = params
 
+        res["deps"] = {
+            relpath(dep.fs_path, repo.root_dir): {
+                "hash": dep.hash_info.value,
+                "size": dep.meta.size,
+                "nfiles": dep.meta.nfiles,
+            }
+            for dep in repo.index.deps
+            if not isinstance(dep, (ParamsDependency, RepoDependency))
+        }
+        res["outs"] = {
+            relpath(out.fs_path, repo.root_dir): {
+                "hash": out.hash_info.value,
+                "size": out.meta.size,
+                "nfiles": out.meta.nfiles,
+                "use_cache": out.use_cache,
+                "is_data_source": out.stage.is_data_source,
+            }
+            for out in repo.index.outs
+            if not (out.is_metric or out.is_plot)
+        }
+
         res["queued"] = stash
         if running is not None and exp_rev in running:
             res["running"] = True
-            res["executor"] = running[exp_rev].get(ExecutorInfo.PARAM_LOCATION)
+            res["executor"] = running[exp_rev].get("location")
         else:
             res["running"] = False
             res["executor"] = None
@@ -55,10 +79,12 @@ def _collect_experiment_commit(
             res["metrics"] = vals
 
         if not sha_only and rev != "workspace":
-            for refspec in ["refs/tags", "refs/heads"]:
-                name = repo.scm.describe(rev, base=refspec)
-                if name:
-                    break
+            name: Optional[str] = None
+            if is_baseline:
+                for refspec in ["refs/tags", "refs/heads"]:
+                    name = repo.scm.describe(rev, base=refspec)
+                    if name:
+                        break
             if not name:
                 name = repo.experiments.get_exact_name(rev)
             if name:
@@ -101,52 +127,37 @@ def _collect_experiment_branch(
     return res
 
 
-@locked
 def show(
-    repo,
+    repo: "Repo",
     all_branches=False,
     all_tags=False,
-    revs=None,
+    revs: Union[List[str], str, None] = None,
     all_commits=False,
     sha_only=False,
     num=1,
     param_deps=False,
     onerror: Optional[Callable] = None,
+    fetch_running: bool = True,
 ):
+
     if onerror is None:
         onerror = onerror_collect
 
     res: Dict[str, Dict] = defaultdict(OrderedDict)
 
-    if num < 1:
-        raise InvalidArgumentError(f"Invalid number of commits '{num}'")
+    if not any([revs, all_branches, all_tags, all_commits]):
+        revs = ["HEAD"]
+    if isinstance(revs, str):
+        revs = [revs]
 
-    if revs is None:
-        from dvc.scm import RevError, resolve_rev
-
-        revs = []
-        for n in range(num):
-            try:
-                head = fix_exp_head(repo.scm, f"HEAD~{n}")
-                assert head
-                revs.append(resolve_rev(repo.scm, head))
-            except RevError:
-                break
-
-    revs = OrderedDict(
-        (rev, None)
-        for rev in repo.brancher(
-            revs=revs,
-            all_branches=all_branches,
-            all_tags=all_tags,
-            all_commits=all_commits,
-            sha_only=True,
-        )
+    found_revs: Dict[str, List[str]] = {"workspace": []}
+    found_revs.update(
+        iter_revs(repo.scm, revs, num, all_branches, all_tags, all_commits)
     )
 
-    running = repo.experiments.get_running_exps()
+    running = repo.experiments.get_running_exps(fetch_refs=fetch_running)
 
-    for rev in revs:
+    for rev in found_revs:
         res[rev]["baseline"] = _collect_experiment_commit(
             repo,
             rev,
@@ -154,6 +165,7 @@ def show(
             param_deps=param_deps,
             running=running,
             onerror=onerror,
+            is_baseline=True,
         )
 
         if rev == "workspace":
@@ -181,7 +193,7 @@ def show(
             )
         # collect queued (not yet reproduced) experiments
         for stash_rev, entry in repo.experiments.stash_revs.items():
-            if entry.baseline_rev in revs:
+            if entry.baseline_rev in found_revs:
                 if stash_rev not in running or not running[stash_rev].get(
                     "last"
                 ):

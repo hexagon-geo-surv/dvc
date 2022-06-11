@@ -24,7 +24,6 @@ def test_index(tmp_dir, scm, dvc, run_copy):
 
     assert index.outs_graph
     assert index.graph
-    assert index.build_graph()
     assert isinstance(index.outs_trie, Trie)
     assert index.identifier
     index.check_graph()
@@ -229,7 +228,7 @@ def test_unique_identifier(tmp_dir, dvc, scm, run_copy):
 
 def test_skip_graph_checks(dvc, mocker):
     # See https://github.com/iterative/dvc/issues/2671 for more info
-    mock_build_graph = mocker.spy(Index, "build_graph")
+    mock_build_graph = mocker.spy(Index.graph, "fget")
 
     # sanity check
     Index(dvc).check_graph()
@@ -259,7 +258,7 @@ def get_index(dvc, rev):
 
 @pytest.mark.parametrize("rev", ["workspace", "HEAD"])
 def test_used_objs(tmp_dir, scm, dvc, run_copy, rev):
-    from dvc.hash_info import HashInfo
+    from dvc_objects.hash_info import HashInfo
 
     dvc.config["core"]["autostage"] = True
     tmp_dir.dvc_gen({"dir": {"subdir": {"file": "file"}}, "foo": "foo"})
@@ -292,3 +291,15 @@ def test_used_objs(tmp_dir, scm, dvc, run_copy, rev):
     assert index.used_objs("copy-foo-bar", with_deps=True) == {
         None: {expected_objs[0]}
     }
+
+
+def test_getitem(tmp_dir, dvc, run_copy):
+    (stage1,) = tmp_dir.dvc_gen("foo", "foo")
+    stage2 = run_copy("foo", "bar", name="copy-foo-bar")
+
+    index = Index(dvc)
+    assert index["foo.dvc"] == stage1
+    assert index["copy-foo-bar"] == stage2
+
+    with pytest.raises(KeyError):
+        _ = index["no-valid-stage-name"]

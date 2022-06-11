@@ -19,16 +19,18 @@ def get_url(path, repo=None, rev=None, remote=None):
     directory in the remote storage.
     """
     with Repo.open(repo, rev=rev, subrepos=True, uninitialized=True) as _repo:
-        fs_path = _repo.fs.path.join(_repo.root_dir, path)
+        fs_path = _repo.dvcfs.from_os_path(path)
         with reraise(FileNotFoundError, PathMissingError(path, repo)):
-            metadata = _repo.repo_fs.metadata(fs_path)
+            info = _repo.dvcfs.info(fs_path)
 
-        if not metadata.is_dvc:
+        dvc_info = info.get("dvc_info")
+        if not dvc_info:
             raise OutputNotFoundError(path, repo)
 
-        cloud = metadata.repo.cloud
-        md5 = metadata.repo.dvcfs.info(fs_path)["md5"]
-        return cloud.get_url_for(remote, checksum=md5)
+        dvc_repo = info["repo"]
+        md5 = dvc_info["md5"]
+
+        return dvc_repo.cloud.get_url_for(remote, checksum=md5)
 
 
 def open(  # noqa, pylint: disable=redefined-builtin
