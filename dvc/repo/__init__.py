@@ -392,6 +392,7 @@ class Repo:
         recursive=False,
         used_run_cache=None,
         revs=None,
+        num=1,
     ):
         """Get the stages related to the given target and collect
         the `info` of its outputs.
@@ -416,6 +417,7 @@ class Repo:
             all_tags=all_tags,
             all_commits=all_commits,
             all_experiments=all_experiments,
+            num=num,
         ):
             for odb, objs in self.index.used_objs(
                 targets,

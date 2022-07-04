@@ -1,8 +1,12 @@
 import logging
+from typing import TYPE_CHECKING, List, Optional
 
 from dvc.exceptions import InvalidArgumentError
 
 from . import locked
+
+if TYPE_CHECKING:
+    from dvc.repo import Repo
 
 logger = logging.getLogger(__name__)
 
@@ -11,24 +15,26 @@ def _raise_error_if_all_disabled(**kwargs):
     if not any(kwargs.values()):
         raise InvalidArgumentError(
             "Either of `-w|--workspace`, `-a|--all-branches`, `-T|--all-tags` "
-            "`--all-experiments` or `--all-commits` needs to be set."
+            "`--all-experiments`, `--all-commits` or `--rev` needs to be set."
         )
 
 
 @locked
 def gc(
-    self,
-    all_branches=False,
-    cloud=False,
-    remote=None,
-    with_deps=False,
-    all_tags=False,
-    all_commits=False,
-    all_experiments=False,
-    force=False,
-    jobs=None,
-    repos=None,
-    workspace=False,
+    self: "Repo",
+    all_branches: bool = False,
+    cloud: bool = False,
+    remote: Optional[str] = None,
+    with_deps: bool = False,
+    all_tags: bool = False,
+    all_commits: bool = False,
+    all_experiments: bool = False,
+    force: bool = False,
+    jobs: int = None,
+    repos: Optional[List[str]] = None,
+    workspace: bool = False,
+    rev: Optional[str] = None,
+    num: int = 1,
 ):
 
     # require `workspace` to be true to come into effect.
@@ -40,6 +46,7 @@ def gc(
         all_commits=all_commits,
         all_branches=all_branches,
         all_experiments=all_experiments,
+        rev=rev,
     )
 
     from contextlib import ExitStack
@@ -67,6 +74,8 @@ def gc(
                 remote=remote,
                 force=force,
                 jobs=jobs,
+                revs=[rev] if rev else None,
+                num=num,
             ).values():
                 used_obj_ids.update(obj_ids)
 

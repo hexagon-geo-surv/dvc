@@ -11,15 +11,6 @@ logger = logging.getLogger(__name__)
 
 class CmdGC(CmdBase):
     def run(self):
-        from dvc.repo.gc import _raise_error_if_all_disabled
-
-        _raise_error_if_all_disabled(
-            all_branches=self.args.all_branches,
-            all_tags=self.args.all_tags,
-            all_commits=self.args.all_commits,
-            workspace=self.args.workspace,
-        )
-
         msg = "This will remove all cache except items used in "
 
         msg += "the workspace"
@@ -33,7 +24,8 @@ class CmdGC(CmdBase):
             msg += " and all git tags"
         elif self.args.all_experiments:
             msg += " and all experiments"
-
+        elif self.args.rev:
+            msg += f" and last {self.args.num} commits from {self.args.rev}"
         if self.args.repos:
             msg += " of the current and the following repos:"
 
@@ -59,6 +51,8 @@ class CmdGC(CmdBase):
             jobs=self.args.jobs,
             repos=self.args.repos,
             workspace=self.args.workspace,
+            rev=self.args.rev,
+            num=self.args.num,
         )
         return 0
 
@@ -82,6 +76,25 @@ def add_parser(subparsers, parent_parser):
         action="store_true",
         default=False,
         help="Keep data files used in the current workspace.",
+    )
+    gc_parser.add_argument(
+        "--rev",
+        type=str,
+        default=None,
+        help="Keep data files used in the specified <commit>.",
+        metavar="<commit>",
+    )
+    gc_parser.add_argument(
+        "-n",
+        "--num",
+        type=int,
+        default=1,
+        dest="num",
+        metavar="<num>",
+        help=(
+            "Keep data files used in the last `num` commits "
+            "starting from the `--rev` <commit>. "
+        ),
     )
     gc_parser.add_argument(
         "-a",
