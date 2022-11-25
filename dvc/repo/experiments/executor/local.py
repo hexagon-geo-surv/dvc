@@ -2,7 +2,7 @@ import logging
 import os
 from contextlib import ExitStack
 from tempfile import mkdtemp
-from typing import TYPE_CHECKING, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from funcy import cached_property
 from scmrepo.exceptions import SCMError as _SCMError
@@ -221,6 +221,7 @@ class WorkspaceExecutor(BaseLocalExecutor):
         cls,
         info: "ExecutorInfo",
         force: bool = False,
+        include_untracked: Optional[List[str]] = None,
     ) -> ExecutorResult:
         from dvc.repo import Repo
 
@@ -237,6 +238,8 @@ class WorkspaceExecutor(BaseLocalExecutor):
         try:
             stages = dvc.commit([], force=force)
             exp_hash = cls.hash_exp(stages)
+            if include_untracked:
+                dvc.scm.add(include_untracked)
             cls.commit(
                 dvc.scm,
                 exp_hash,
