@@ -3,8 +3,10 @@ import io
 import logging
 import os
 from collections import OrderedDict, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from copy import deepcopy
 from functools import partial
+from multiprocessing import cpu_count
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -136,7 +138,6 @@ class Plots:
                 data_targets = _get_data_targets(definitions)
 
                 res[rev]["sources"] = self._collect_data_sources(
-                    revision=rev,
                     targets=data_targets,
                     recursive=recursive,
                     props=props,
@@ -148,7 +149,6 @@ class Plots:
     def _collect_data_sources(
         self,
         targets: Optional[List[str]] = None,
-        revision: Optional[str] = None,
         recursive: bool = False,
         props: Optional[Dict] = None,
         onerror: Optional[Callable] = None,
@@ -159,7 +159,7 @@ class Plots:
 
         props = props or {}
 
-        plots = _collect_plots(self.repo, targets, revision, recursive)
+        plots = _collect_plots(self.repo, targets, recursive)
         res: Dict[str, Any] = {}
         for fs_path, rev_props in plots.items():
             joined_props = {**rev_props, **props}
@@ -270,19 +270,31 @@ def _is_plot(out: "Output") -> bool:
 
 
 def _resolve_data_sources(plots_data: Dict):
-    for value in plots_data.values():
+    values = list(plots_data.values())
+    to_resolve = []
+    while values:
+        value = values.pop()
         if isinstance(value, dict):
             if "data_source" in value:
-                data_source = value.pop("data_source")
-                assert callable(data_source)
-                value.update(data_source())
-            _resolve_data_sources(value)
+                to_resolve.append(value)
+            values.extend(value.values())
+
+    def resolve(value):
+        data_source = value.pop("data_source")
+        assert callable(data_source)
+        value.update(data_source())
+
+    executor = ThreadPoolExecutor(
+        max_workers=4 * cpu_count(), thread_name_prefix="plots_resolve_data"
+    )
+
+    with executor:
+        executor.map(resolve, to_resolve)
 
 
 def _collect_plots(
     repo: "Repo",
     targets: List[str] = None,
-    rev: str = None,
     recursive: bool = False,
 ) -> Dict[str, Dict]:
     from dvc.repo.collect import collect
@@ -291,7 +303,6 @@ def _collect_plots(
         repo,
         output_filter=_is_plot,
         targets=targets,
-        rev=rev,
         recursive=recursive,
     )
 
