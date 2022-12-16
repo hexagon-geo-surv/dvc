@@ -53,7 +53,7 @@ dependencies = [
     "scmrepo==0.1.4",
     "dvc-render==0.0.15",
     "dvc-task==0.1.8",
-    "dvclive>=1.2.1",
+    "dvclive>=1.2.2",
     "dvc-data==0.28.4",
     "dvc-http==2.27.2",
     "hydra-core>=1.1.0",
@@ -108,7 +108,7 @@ tests = [
     # and, protected method calls in our tests
     "pylint-plugin-utils==0.7",
     # type-checking
-    "mypy==0.990",
+    "mypy==0.991",
     "types-requests",
     "types-tabulate",
     "types-toml",
