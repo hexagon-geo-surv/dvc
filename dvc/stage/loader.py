@@ -90,6 +90,7 @@ class StageLoader(Mapping):
         stage.name = name
         stage.desc = stage_data.get(Stage.PARAM_DESC)
         stage.meta = stage_data.get(Stage.PARAM_META)
+        stage.pipeline_status = "pending"
 
         deps = project(stage_data, [stage.PARAM_DEPS, stage.PARAM_PARAMS])
         fill_stage_dependencies(stage, **deps)

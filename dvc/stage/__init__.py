@@ -1,10 +1,11 @@
+import json
 import logging
 import os
 import string
 from collections import defaultdict
 from contextlib import suppress
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, Optional, Set
+from typing import TYPE_CHECKING, Any, Dict, Literal, Optional, Set
 
 from funcy import cached_property, project
 
@@ -19,7 +20,7 @@ from dvc.utils import relpath
 
 from . import params
 from .decorators import rwlocked
-from .exceptions import StageUpdateError
+from .exceptions import StageCmdFailedError, StageUpdateError
 from .imports import sync_import, update_import
 from .run import run_stage
 from .utils import (
@@ -141,6 +142,7 @@ class Stage(params.StageParams):
         desc: Optional[str] = None,
         meta=None,
     ):
+        # set status to `pending`
         if deps is None:
             deps = []
         if outs is None:
@@ -413,6 +415,7 @@ class Stage(params.StageParams):
                 logger.info(
                     "Stage '%s' didn't change, skipping", self.addressing
                 )
+            self.pipeline_status = "skipped"
             return None
 
         msg = (
@@ -423,7 +426,13 @@ class Stage(params.StageParams):
         if interactive and not prompt.confirm(msg):
             raise DvcException("reproduction aborted by the user")
 
-        self.run(**kwargs)
+        self.pipeline_status = "running"
+        try:
+            self.run(**kwargs)
+        except Exception:
+            self.pipeline_status = "failed"
+            raise
+        self.pipeline_status = "completed"
 
         logger.debug("%s was reproduced", self)
 
@@ -753,6 +762,9 @@ class Stage(params.StageParams):
         self.dvcfile.dump(self, **kwargs)
 
 
+PipelineStatus = Literal["pending", "running", "success", "failure", "skip"]
+
+
 class PipelineStage(Stage):
     def __init__(self, *args, name=None, **kwargs):
         super().__init__(*args, **kwargs)
@@ -765,6 +777,22 @@ class PipelineStage(Stage):
 
     def __hash__(self):
         return hash((self.path_in_repo, self.name))
+
+    @property
+    def pipeline_status(self) -> PipelineStatus:
+        return self._pipeline_status
+
+    @pipeline_status.setter
+    def pipeline_status(self, value: PipelineStatus):
+        self._pipeline_status = value
+
+        with open(self.repo.pipeline_status_file, "r") as f:
+            _status = json.load(f)
+
+        _status[self.addressing] = value
+
+        with open(self.repo.pipeline_status_file, "w") as f:
+            json.dump(_status, f)
 
     @property
     def addressing(self):

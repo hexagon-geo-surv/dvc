@@ -232,6 +232,9 @@ class Repo:
         ] = None
         self._lock_depth = 0
 
+        with open(self.pipeline_status_file, "w") as f:
+            f.write("{}")
+
     def __str__(self):
         return self.url or self.root_dir
 
@@ -500,6 +503,10 @@ class Repo:
     @cached_property
     def index_db_dir(self):
         return self._get_database_dir("index")
+
+    @property
+    def pipeline_status_file(self):
+        return os.path.join(self.dvc_dir, "pipeline_status.json")
 
     @contextmanager
     def open_by_relpath(self, path, remote=None, mode="r", encoding=None):
