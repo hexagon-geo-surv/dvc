@@ -130,22 +130,6 @@ class StageCache:
         finally:
             self.repo.odb.local.cache_types = cache_types
 
-    def _uncached_outs(self, stage, cache):
-        # NOTE: using temporary stage to avoid accidentally modifying original
-        # stage and to workaround `commit/checkout` not working for uncached
-        # outputs.
-        cached_stage = self._create_stage(cache, wdir=stage.wdir)
-
-        outs_no_cache = [
-            out.def_path for out in stage.outs if not out.use_cache
-        ]
-
-        # NOTE: using copy link to make it look like a git-tracked file
-        with self._cache_type_copy():
-            for out in cached_stage.outs:
-                if out.def_path in outs_no_cache:
-                    yield out
-
     def save(self, stage):
         from .serialize import to_single_stage_lockfile
 
@@ -158,9 +142,6 @@ class StageCache:
 
         existing_cache = self._load_cache(cache_key, cache_value)
         cache = existing_cache or cache
-
-        for out in self._uncached_outs(stage, cache):
-            out.commit()
 
         if existing_cache:
             return
