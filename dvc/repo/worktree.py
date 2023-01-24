@@ -205,13 +205,10 @@ def push_worktree(
                 **diff_kwargs,
             )
 
-        for stage in view.stages:
-            for out in stage.outs:
-                workspace, _key = out.index_key
-                _update_out_meta(
-                    out, repo.index.data[workspace], remote_obj.name
-                )
-            stages.add(stage)
+        for out in view.outs:
+            workspace, _key = out.index_key
+            _update_out_meta(out, repo.index.data[workspace], remote_obj.name)
+            stages.add(out.stage)
 
     for stage in stages:
         stage.dump(with_files=True, update_pipeline=False)
