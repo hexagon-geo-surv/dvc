@@ -342,3 +342,33 @@ def to_studio_params(dvc_params):
             result[file_name] = file_data["data"]
 
     return result
+
+
+def to_studio_metrics(dvc_metrics):
+    """Convert from internal DVC format to Studio format.
+
+    From:
+
+    {
+        "workspace": {
+            "data": {
+                "metrics.json": {
+                    "data": {"foo": 1}
+                }
+            }
+        }
+    }
+
+    To:
+
+    {
+        "metrics.json": {
+            "data": {"foo": 1}
+        }
+    }
+    """
+    result: Dict = {}
+    for rev_data in dvc_metrics.values():
+        result = rev_data.get("data", {})
+        break
+    return result

@@ -32,7 +32,7 @@ from dvc.repo.experiments.refs import (
     EXEC_CHECKPOINT,
     ExpRefInfo,
 )
-from dvc.repo.experiments.utils import to_studio_params
+from dvc.repo.experiments.utils import to_studio_metrics, to_studio_params
 from dvc.stage.serialize import to_lockfile
 from dvc.ui import ui
 from dvc.utils import dict_sha256, env2bool, relpath
@@ -563,7 +563,7 @@ class BaseExecutor(ABC):
             post_live_metrics(
                 "start",
                 info.baseline_rev,
-                info.name,
+                info.name,  # type: ignore[arg-type]
                 "dvc",
                 params=to_studio_params(dvc.params.show()),
             )
@@ -587,9 +587,10 @@ class BaseExecutor(ABC):
             post_live_metrics(
                 "done",
                 info.baseline_rev,
-                info.name,
+                info.name,  # type: ignore[arg-type]
                 "dvc",
                 experiment_rev=dvc.experiments.scm.get_ref(EXEC_BRANCH),
+                metrics=to_studio_metrics(dvc.metrics.show()),
             )
 
             if infofile is not None:
