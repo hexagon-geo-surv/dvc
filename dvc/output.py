@@ -1,11 +1,13 @@
 import logging
 import os
+import posixpath
 from collections import defaultdict
-from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple, Type, cast
+from operator import itemgetter
+from typing import TYPE_CHECKING, Dict, List, Optional, Set, Tuple, Type
 from urllib.parse import urlparse
 
-from funcy import collecting, project
-from voluptuous import And, Any, Coerce, Length, Lower, Required, SetTo
+from funcy import collecting, first, project
+from voluptuous import All, And, Any, Coerce, Length, Lower, Required, SetTo
 
 from dvc import prompt
 from dvc.exceptions import (
@@ -18,7 +20,6 @@ from dvc.exceptions import (
     RemoteCacheRequiredError,
 )
 from dvc.utils.objects import cached_property
-from dvc_data.hashfile import Tree
 from dvc_data.hashfile import check as ocheck
 from dvc_data.hashfile import load as oload
 from dvc_data.hashfile.build import build
@@ -27,20 +28,22 @@ from dvc_data.hashfile.hash_info import HashInfo
 from dvc_data.hashfile.istextfile import istextfile
 from dvc_data.hashfile.meta import Meta
 from dvc_data.hashfile.transfer import transfer as otransfer
-from dvc_data.index import DataIndexEntry
+from dvc_data.hashfile.tree import Tree
 from dvc_objects.errors import ObjectFormatError
 
 from .annotations import ANNOTATION_FIELDS, ANNOTATION_SCHEMA, Annotation
 from .fs import LocalFileSystem, RemoteMissingDepsError, Schemes, get_cloud_fs
-from .fs.callbacks import DEFAULT_CALLBACK, Callback
+from .fs.callbacks import DEFAULT_CALLBACK
 from .utils import relpath
 from .utils.fs import path_isin
 
 if TYPE_CHECKING:
+    from dvc_data.hashfile.db import HashFileDB
     from dvc_data.hashfile.obj import HashFile
     from dvc_data.index import DataIndexKey
     from dvc_objects.db import ObjectDB
 
+    from .fs.callbacks import Callback
     from .ignore import DvcIgnoreFilter
 
 logger = logging.getLogger(__name__)
@@ -150,11 +153,11 @@ def _merge_data(s_list):
             d[key].update({})
             continue
         if not isinstance(key, dict):
-            raise ValueError(f"'{type(key).__name__}' not supported.")
+            raise ValueError(f"'{type(key).__name__}' not supported.")  # noqa: TRY004
 
         for k, flags in key.items():
             if not isinstance(flags, dict):
-                raise ValueError(
+                raise ValueError(  # noqa: TRY004
                     f"Expected dict for '{k}', got: '{type(flags).__name__}'"
                 )
             d[k].update(flags)
@@ -202,6 +205,41 @@ def load_from_pipeline(stage, data, typ="outs"):
             metric=metric,
             **extra,
         )
+
+
+def split_file_meta_from_cloud(entry: Dict) -> Dict:
+    if remote_name := entry.pop(Meta.PARAM_REMOTE, None):
+        remote_meta = {}
+        for key in (
+            S3_PARAM_CHECKSUM,
+            HDFS_PARAM_CHECKSUM,
+            Meta.PARAM_VERSION_ID,
+        ):
+            if value := entry.pop(key, None):
+                remote_meta[key] = value
+
+        if remote_meta:
+            entry[Output.PARAM_CLOUD] = {remote_name: remote_meta}
+    return entry
+
+
+def merge_file_meta_from_cloud(entry: Dict) -> Dict:
+    cloud_meta = entry.pop(Output.PARAM_CLOUD, {})
+    if remote_name := first(cloud_meta):
+        entry.update(cloud_meta[remote_name])
+        entry[Meta.PARAM_REMOTE] = remote_name
+    return entry
+
+
+def _serialize_tree_obj_to_files(obj: "Tree") -> List[Dict[str, Any]]:
+    key = obj.PARAM_RELPATH
+    return sorted(
+        (
+            {key: posixpath.sep.join(parts), **hi.to_dict(), **meta.to_dict()}
+            for parts, meta, hi in obj
+        ),
+        key=itemgetter(key),
+    )
 
 
 class OutputDoesNotExistError(DvcException):
@@ -258,6 +296,7 @@ class Output:
     PARAM_PERSIST = "persist"
     PARAM_REMOTE = "remote"
     PARAM_PUSH = "push"
+    PARAM_CLOUD = "cloud"
 
     METRIC_SCHEMA = Any(
         None,
@@ -273,7 +312,7 @@ class Output:
     IsStageFileError: Type[DvcException] = OutputIsStageFileError
     IsIgnoredError: Type[DvcException] = OutputIsIgnoredError
 
-    def __init__(
+    def __init__(  # noqa: PLR0913
         self,
         stage,
         path,
@@ -297,17 +336,18 @@ class Output:
             desc=desc, type=type, labels=labels or [], meta=meta or {}
         )
         self.repo = stage.repo if not repo and stage else repo
-        meta = Meta.from_dict(info or {})
+        meta_d = merge_file_meta_from_cloud(info or {})
+        meta = Meta.from_dict(meta_d)
         # NOTE: when version_aware is not passed into get_cloud_fs, it will be
         # set based on whether or not path is versioned
-        fs_kwargs = {"version_aware": True} if meta.version_id else {}
+        fs_kwargs = {}
+        if meta.version_id or files:
+            fs_kwargs["version_aware"] = True
 
         if fs_config is not None:
             fs_kwargs.update(**fs_config)
 
-        fs_cls, fs_config, fs_path = get_cloud_fs(
-            self.repo, url=path, **fs_kwargs
-        )
+        fs_cls, fs_config, fs_path = get_cloud_fs(self.repo, url=path, **fs_kwargs)
         self.fs = fs_cls(**fs_config)
 
         if (
@@ -340,6 +380,9 @@ class Output:
         # should be absolute and don't contain remote:// refs.
         self.stage = stage
         self.meta = meta
+
+        if files is not None:
+            files = [merge_file_meta_from_cloud(f) for f in files]
         self.files = files
         self.use_cache = False if self.IS_DEPENDENCY else cache
         self.metric = False if self.IS_DEPENDENCY else metric
@@ -351,6 +394,7 @@ class Output:
         self.fs_path = self._parse_path(self.fs, fs_path)
         self.obj: Optional["HashFile"] = None
 
+        self.odb: Optional["HashFileDB"] = None
         self.remote = remote
 
         if self.fs.version_aware:
@@ -368,7 +412,23 @@ class Output:
             name=self.hash_name,
             value=getattr(self.meta, self.hash_name, None),
         )
-        if self.meta.nfiles or self.hash_info and self.hash_info.isdir:
+        self._compute_meta_hash_info_from_files()
+
+    def _compute_meta_hash_info_from_files(self) -> None:
+        if self.files:
+            from dvc_data.hashfile.db import HashFileDB
+
+            tree = Tree.from_list(self.files, hash_name=self.hash_name)
+            tree.digest(with_meta=True)
+            self.odb = HashFileDB(tree.fs, tree.path + ".odb")
+            self.odb.add(tree.path, tree.fs, tree.hash_info.value)
+
+            self.hash_info = tree.hash_info
+            self.meta.isdir = True
+            self.meta.nfiles = len(self.files)
+            self.meta.size = sum(f.get("size") for f in self.files)
+            self.meta.remote = first(f.get("remote") for f in self.files)
+        elif self.meta.nfiles or self.hash_info and self.hash_info.isdir:
             self.meta.isdir = True
             if not self.hash_info and self.hash_name != "md5":
                 md5 = getattr(self.meta, "md5", None)
@@ -446,17 +506,17 @@ class Output:
         return self.use_cache or self.stage.is_repo_import
 
     @property
-    def odb(self):
+    def cache(self):
         odb_name = "repo" if self.is_in_repo else self.protocol
-        odb = getattr(self.repo.odb, odb_name)
+        odb = getattr(self.repo.cache, odb_name)
         if self.use_cache and odb is None:
             raise RemoteCacheRequiredError(self.fs.protocol, self.fs_path)
         return odb
 
     @property
     def cache_path(self):
-        return self.odb.fs.unstrip_protocol(
-            self.odb.oid_to_path(self.hash_info.value)
+        return self.cache.fs.unstrip_protocol(
+            self.cache.oid_to_path(self.hash_info.value)
         )
 
     def get_hash(self):
@@ -465,9 +525,9 @@ class Output:
 
     def _get_hash_meta(self):
         if self.use_cache:
-            odb = self.odb
+            odb = self.cache
         else:
-            odb = self.repo.odb.local
+            odb = self.repo.cache.local
         _, meta, obj = build(
             odb,
             self.fs_path,
@@ -509,36 +569,6 @@ class Output:
             key = self.fs.path.parts(no_drive)[1:]
         return workspace, key
 
-    def get_entry(self) -> "DataIndexEntry":
-        from dvc.config import NoRemoteError
-
-        try:
-            remote = self.repo.cloud.get_remote_odb(self.remote)
-        except NoRemoteError:
-            remote = None
-
-        if self.files and not self.obj:
-            self.obj = self.get_obj()
-
-        entry = DataIndexEntry(
-            meta=self.meta,
-            obj=self.obj,
-            hash_info=self.hash_info,
-            odb=self.odb,
-            cache=self.odb,
-            remote=remote,
-        )
-        if self.stage.is_import and not self.stage.is_repo_import:
-            dep = self.stage.deps[0]
-            entry.fs = dep.fs
-            entry.path = dep.fs_path
-            entry.meta = dep.meta
-            if not entry.obj:
-                if not dep.obj and dep.files:
-                    dep.obj = dep.get_obj()
-                entry.obj = dep.obj
-        return entry
-
     def changed_checksum(self):
         return self.hash_info != self.get_hash()
 
@@ -551,7 +581,7 @@ class Output:
             return True
 
         try:
-            ocheck(self.odb, obj)
+            ocheck(self.cache, obj)
             return False
         except (FileNotFoundError, ObjectFormatError):
             return True
@@ -640,7 +670,7 @@ class Output:
 
         if self.use_cache:
             _, self.meta, self.obj = build(
-                self.odb,
+                self.cache,
                 self.fs_path,
                 self.fs,
                 self.hash_name,
@@ -648,7 +678,7 @@ class Output:
             )
         else:
             _, self.meta, self.obj = build(
-                self.repo.odb.local,
+                self.repo.cache.local,
                 self.fs_path,
                 self.fs,
                 self.hash_name,
@@ -656,16 +686,14 @@ class Output:
                 dry_run=True,
             )
             if not self.IS_DEPENDENCY:
-                logger.debug(
-                    "Output '%s' doesn't use cache. Skipping saving.", self
-                )
+                logger.debug("Output '%s' doesn't use cache. Skipping saving.", self)
 
         self.hash_info = self.obj.hash_info
         self.files = None
 
     def set_exec(self) -> None:
         if self.isfile() and self.meta.isexec:
-            self.odb.set_exec(self.fs_path)
+            self.cache.set_exec(self.fs_path)
 
     def _checkout(self, *args, **kwargs) -> Optional[bool]:
         from dvc_data.hashfile.checkout import CheckoutError as _CheckoutError
@@ -681,7 +709,7 @@ class Output:
         except _CheckoutError as exc:
             raise CheckoutError(exc.paths, {})  # noqa: B904
 
-    def commit(self, filter_info=None) -> None:
+    def commit(self, filter_info=None, relink=True) -> None:
         if not self.exists:
             raise self.DoesNotExistError(self)
 
@@ -689,15 +717,16 @@ class Output:
 
         if self.use_cache:
             granular = (
-                self.is_dir_checksum
-                and filter_info
-                and filter_info != self.fs_path
+                self.is_dir_checksum and filter_info and filter_info != self.fs_path
             )
+            # NOTE: trying to use hardlink during transfer only if we will be
+            # relinking later
+            hardlink = relink
             if granular:
-                obj = self._commit_granular_dir(filter_info)
+                obj = self._commit_granular_dir(filter_info, hardlink)
             else:
                 staging, _, obj = build(
-                    self.odb,
+                    self.cache,
                     filter_info or self.fs_path,
                     self.fs,
                     self.hash_name,
@@ -705,54 +734,61 @@ class Output:
                 )
                 otransfer(
                     staging,
-                    self.odb,
+                    self.cache,
                     {obj.hash_info},
                     shallow=False,
-                    hardlink=True,
+                    hardlink=hardlink,
                 )
-            self._checkout(
-                filter_info or self.fs_path,
-                self.fs,
-                obj,
-                self.odb,
-                relink=True,
-                state=self.repo.state,
-                prompt=prompt.confirm,
-            )
-            self.set_exec()
+            if relink:
+                self._checkout(
+                    filter_info or self.fs_path,
+                    self.fs,
+                    obj,
+                    self.cache,
+                    relink=True,
+                    state=self.repo.state,
+                    prompt=prompt.confirm,
+                )
+                self.set_exec()
 
-    def _commit_granular_dir(self, filter_info) -> Optional["HashFile"]:
-        prefix = self.fs.path.parts(
-            self.fs.path.relpath(filter_info, self.fs_path)
-        )
-        staging, _, save_obj = build(
-            self.odb,
+    def _commit_granular_dir(self, filter_info, hardlink) -> Optional["HashFile"]:
+        prefix = self.fs.path.parts(self.fs.path.relpath(filter_info, self.fs_path))
+        staging, _, obj = build(
+            self.cache,
             self.fs_path,
             self.fs,
             self.hash_name,
             ignore=self.dvcignore,
         )
-        save_obj = cast(Tree, save_obj)
-        save_obj = cast(Tree, save_obj.filter(prefix))
-        checkout_obj = save_obj.get_obj(self.odb, prefix)
+        assert isinstance(obj, Tree)
+        save_obj = obj.filter(prefix)
+        assert isinstance(save_obj, Tree)
+        checkout_obj = save_obj.get_obj(self.cache, prefix)
         otransfer(
             staging,
-            self.odb,
+            self.cache,
             {save_obj.hash_info} | {oid for _, _, oid in save_obj},
             shallow=True,
-            hardlink=True,
+            hardlink=hardlink,
         )
         return checkout_obj
 
-    def dumpd(self, **kwargs):  # noqa: C901
-        meta = self.meta.to_dict()
-        meta.pop("isdir", None)
-        ret: Dict[str, Any] = {**self.hash_info.to_dict(), **meta}
+    def dumpd(self, **kwargs):  # noqa: C901, PLR0912
+        ret: Dict[str, Any] = {}
+        with_files = (
+            (not self.IS_DEPENDENCY or self.stage.is_import)
+            and self.hash_info.isdir
+            and (kwargs.get("with_files") or self.files is not None)
+        )
+
+        if not with_files:
+            meta_d = self.meta.to_dict()
+            meta_d.pop("isdir", None)
+            ret.update(self.hash_info.to_dict())
+            ret.update(split_file_meta_from_cloud(meta_d))
 
         if self.is_in_repo:
-            path = self.fs.path.as_posix(
-                relpath(self.fs_path, self.stage.wdir)
-            )
+            path = self.fs.path.as_posix(relpath(self.fs_path, self.stage.wdir))
         else:
             path = self.def_path
 
@@ -788,27 +824,19 @@ class Output:
             if not self.can_push:
                 ret[self.PARAM_PUSH] = self.can_push
 
-        if (
-            (not self.IS_DEPENDENCY or self.stage.is_import)
-            and self.hash_info.isdir
-            and (kwargs.get("with_files") or self.files is not None)
-        ):
-            obj: Optional["HashFile"]
-            if self.obj:
-                obj = self.obj
-            else:
-                obj = self.get_obj()
+        if with_files:
+            obj = self.obj or self.get_obj()
             if obj:
-                obj = cast(Tree, obj)
-                ret[self.PARAM_FILES] = obj.as_list(with_meta=True)
-
+                assert isinstance(obj, Tree)
+                ret[self.PARAM_FILES] = [
+                    split_file_meta_from_cloud(f)
+                    for f in _serialize_tree_obj_to_files(obj)
+                ]
         return ret
 
     def verify_metric(self):
         if self.fs.protocol != "local":
-            raise DvcException(
-                f"verify metric is not supported for {self.protocol}"
-            )
+            raise DvcException(f"verify metric is not supported for {self.protocol}")
         if not self.metric:
             return
 
@@ -831,16 +859,15 @@ class Output:
         obj: Optional["HashFile"] = None
         if self.obj:
             obj = self.obj
+        elif self.files:
+            tree = Tree.from_list(self.files, hash_name=self.hash_name)
+            tree.digest()
+            obj = tree
         elif self.hash_info:
-            if self.files:
-                tree = Tree.from_list(self.files, hash_name=self.hash_name)
-                tree.digest()
-                obj = tree
-            else:
-                try:
-                    obj = oload(self.odb, self.hash_info)
-                except (FileNotFoundError, ObjectFormatError):
-                    return None
+            try:
+                obj = oload(self.cache, self.hash_info)
+            except (FileNotFoundError, ObjectFormatError):
+                return None
         else:
             return None
 
@@ -848,8 +875,8 @@ class Output:
         fs_path = self.fs.path
         if filter_info and filter_info != self.fs_path:
             prefix = fs_path.relparts(filter_info, self.fs_path)
-            obj = cast(Tree, obj)
-            obj = obj.get_obj(self.odb, prefix)
+            assert isinstance(obj, Tree)
+            obj = obj.get_obj(self.cache, prefix)
 
         return obj
 
@@ -865,9 +892,7 @@ class Output:
     ) -> Optional[Tuple[bool, Optional[bool]]]:
         if not self.use_cache:
             if progress_callback != DEFAULT_CALLBACK:
-                progress_callback.relative_update(
-                    self.get_files_number(filter_info)
-                )
+                progress_callback.relative_update(self.get_files_number(filter_info))
             return None
 
         obj = self.get_obj(filter_info=filter_info)
@@ -887,7 +912,7 @@ class Output:
                 filter_info or self.fs_path,
                 self.fs,
                 obj,
-                self.odb,
+                self.cache,
                 force=force,
                 progress_callback=progress_callback,
                 relink=relink,
@@ -928,7 +953,7 @@ class Output:
         self, source, odb=None, jobs=None, update=False, no_progress_bar=False
     ):
         if odb is None:
-            odb = self.odb
+            odb = self.cache
 
         cls, config, from_info = get_cloud_fs(self.repo, url=source)
         from_fs = cls(**config)
@@ -980,15 +1005,15 @@ class Output:
 
     def unprotect(self):
         if self.exists:
-            self.odb.unprotect(self.fs_path)
+            self.cache.unprotect(self.fs_path)
 
     def get_dir_cache(self, **kwargs):
         if not self.is_dir_checksum:
             raise DvcException("cannot get dir cache for file checksum")
 
-        obj = self.odb.get(self.hash_info.value)
+        obj = self.cache.get(self.hash_info.value)
         try:
-            ocheck(self.odb, obj)
+            ocheck(self.cache, obj)
         except FileNotFoundError:
             if self.remote:
                 kwargs["remote"] = self.remote
@@ -998,7 +1023,7 @@ class Output:
             return self.obj
 
         try:
-            self.obj = oload(self.odb, self.hash_info)
+            self.obj = oload(self.cache, self.hash_info)
         except (FileNotFoundError, ObjectFormatError):
             self.obj = None
 
@@ -1017,7 +1042,7 @@ class Output:
             logger.debug("failed to pull cache for '%s'", self)
 
         try:
-            ocheck(self.odb, self.odb.get(self.hash_info.value))
+            ocheck(self.cache, self.cache.get(self.hash_info.value))
         except FileNotFoundError:
             msg = (
                 "Missing cache for directory '{}'. "
@@ -1032,16 +1057,14 @@ class Output:
             return None
 
         obj = self.get_obj()
+        assert obj is None or isinstance(obj, Tree)
         if filter_info and filter_info != self.fs_path:
             assert obj
-            prefix = self.fs.path.parts(
-                self.fs.path.relpath(filter_info, self.fs_path)
-            )
-            obj = cast(Tree, obj)
+            prefix = self.fs.path.parts(self.fs.path.relpath(filter_info, self.fs_path))
             return obj.filter(prefix)
-        return cast(Tree, obj)
+        return obj
 
-    def get_used_objs(  # noqa: C901
+    def get_used_objs(  # noqa: C901, PLR0911
         self, **kwargs
     ) -> Dict[Optional["ObjectDB"], Set["HashInfo"]]:
         """Return filtered set of used object IDs for this out."""
@@ -1083,7 +1106,7 @@ class Output:
         else:
             obj = self.get_obj(filter_info=kwargs.get("filter_info"))
             if not obj:
-                obj = self.odb.get(self.hash_info.value)
+                obj = self.cache.get(self.hash_info.value)
 
         if not obj:
             return {}
@@ -1144,14 +1167,10 @@ class Output:
             other.pop(opt, None)
 
         if my != other:
-            raise MergeError(
-                "unable to auto-merge outputs with different options"
-            )
+            raise MergeError("unable to auto-merge outputs with different options")
 
         if not out.is_dir_checksum:
-            raise MergeError(
-                "unable to auto-merge outputs that are not directories"
-            )
+            raise MergeError("unable to auto-merge outputs that are not directories")
 
     def merge(self, ancestor, other, allowed=None):
         from dvc_data.hashfile.tree import MergeError as TreeMergeError
@@ -1170,7 +1189,7 @@ class Output:
 
         try:
             merged = merge(
-                self.odb,
+                self.cache,
                 ancestor_info,
                 self.hash_info,
                 other.hash_info,
@@ -1179,12 +1198,12 @@ class Output:
         except TreeMergeError as exc:
             raise MergeError(str(exc)) from exc
 
-        self.odb.add(merged.path, merged.fs, merged.oid)
+        self.cache.add(merged.path, merged.fs, merged.oid)
 
         self.hash_info = merged.hash_info
         self.files = None
         self.meta = Meta(
-            size=du(self.odb, merged),
+            size=du(self.cache, merged),
             nfiles=len(merged),
         )
 
@@ -1226,7 +1245,8 @@ class Output:
         if not self.obj or not other.hash_info.isdir:
             return
         other_obj = other.obj if other.obj is not None else other.get_obj()
-        assert isinstance(self.obj, Tree) and isinstance(other_obj, Tree)
+        assert isinstance(self.obj, Tree)
+        assert isinstance(other_obj, Tree)
         updated = update_meta(self.obj, other_obj)
         assert updated.hash_info == self.obj.hash_info
         self.obj = updated
@@ -1240,6 +1260,8 @@ META_SCHEMA = {
     Meta.PARAM_VERSION_ID: str,
 }
 
+CLOUD_SCHEMA = All({str: {**META_SCHEMA, **CHECKSUMS_SCHEMA}}, Length(max=1))
+
 ARTIFACT_SCHEMA = {
     **CHECKSUMS_SCHEMA,
     **META_SCHEMA,
@@ -1247,12 +1269,14 @@ ARTIFACT_SCHEMA = {
     Output.PARAM_PLOT: bool,
     Output.PARAM_PERSIST: bool,
     Output.PARAM_CHECKPOINT: bool,
+    Output.PARAM_CLOUD: CLOUD_SCHEMA,
 }
 
 DIR_FILES_SCHEMA: Dict[str, Any] = {
     **CHECKSUMS_SCHEMA,
     **META_SCHEMA,
     Required(Tree.PARAM_RELPATH): str,
+    Output.PARAM_CLOUD: CLOUD_SCHEMA,
 }
 
 SCHEMA = {

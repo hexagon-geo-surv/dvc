@@ -8,17 +8,19 @@ if TYPE_CHECKING:
 
 
 @contextmanager
-def viztracer_profile(path: Union[Callable[[], str], str], depth: int = -1):
+def viztracer_profile(
+    path: Union[Callable[[], str], str],
+    depth: int = -1,
+    log_async: bool = False,
+):
     try:
         import viztracer  # pylint: disable=import-error
     except ImportError:
-        print(  # noqa: T201
-            "Failed to run profiler, viztracer is not installed"
-        )
+        print("Failed to run profiler, viztracer is not installed")  # noqa: T201
         yield
         return
 
-    tracer = viztracer.VizTracer(max_stack_depth=depth)
+    tracer = viztracer.VizTracer(max_stack_depth=depth, log_async=log_async)
 
     tracer.start()
     yield
@@ -76,9 +78,7 @@ def instrument(html_output=False):
     try:
         from pyinstrument import Profiler  # pylint: disable=import-error
     except ImportError:
-        print(  # noqa: T201
-            "Failed to run profiler, pyinstrument is not installed"
-        )
+        print("Failed to run profiler, pyinstrument is not installed")  # noqa: T201
         yield
         return
 
@@ -182,10 +182,15 @@ def debugtools(args: Optional["Namespace"] = None, **kwargs):
                     separate_threads=kw.get("yappi_separate_threads"),
                 )
             )
-        if kw.get("viztracer") or kw.get("viztracer_depth"):
+        if (
+            kw.get("viztracer")
+            or kw.get("viztracer_depth")
+            or kw.get("viztracer_async")
+        ):
             path_func = _get_path_func("viztracer", "json")
             depth = kw.get("viztracer_depth") or -1
-            prof = viztracer_profile(path=path_func, depth=depth)
+            log_async = kw.get("viztracer_async") or False
+            prof = viztracer_profile(path=path_func, depth=depth, log_async=log_async)
             stack.enter_context(prof)
         yield
 
@@ -193,12 +198,8 @@ def debugtools(args: Optional["Namespace"] = None, **kwargs):
 def add_debugging_flags(parser):
     from argparse import SUPPRESS
 
-    parser.add_argument(
-        "--cprofile", action="store_true", default=False, help=SUPPRESS
-    )
-    parser.add_argument(
-        "--yappi", action="store_true", default=False, help=SUPPRESS
-    )
+    parser.add_argument("--cprofile", action="store_true", default=False, help=SUPPRESS)
+    parser.add_argument("--yappi", action="store_true", default=False, help=SUPPRESS)
     parser.add_argument(
         "--yappi-separate-threads",
         action="store_true",
@@ -209,10 +210,11 @@ def add_debugging_flags(parser):
         "--viztracer", action="store_true", default=False, help=SUPPRESS
     )
     parser.add_argument("--viztracer-depth", type=int, help=SUPPRESS)
-    parser.add_argument("--cprofile-dump", help=SUPPRESS)
     parser.add_argument(
-        "--pdb", action="store_true", default=False, help=SUPPRESS
+        "--viztracer-async", action="store_true", default=False, help=SUPPRESS
     )
+    parser.add_argument("--cprofile-dump", help=SUPPRESS)
+    parser.add_argument("--pdb", action="store_true", default=False, help=SUPPRESS)
     parser.add_argument(
         "--instrument", action="store_true", default=False, help=SUPPRESS
     )

@@ -4,7 +4,13 @@ from voluptuous import Any, Optional, Required, Schema
 
 from dvc import dependency, output
 from dvc.annotations import ANNOTATION_SCHEMA
-from dvc.output import CHECKSUMS_SCHEMA, DIR_FILES_SCHEMA, META_SCHEMA, Output
+from dvc.output import (
+    CHECKSUMS_SCHEMA,
+    CLOUD_SCHEMA,
+    DIR_FILES_SCHEMA,
+    META_SCHEMA,
+    Output,
+)
 from dvc.parsing import DO_KWD, FOREACH_KWD, VARS_KWD
 from dvc.parsing.versions import SCHEMA_KWD, lockfile_version_schema
 from dvc.stage.params import StageParams
@@ -27,6 +33,7 @@ DATA_SCHEMA = {
     **CHECKSUMS_SCHEMA,
     **META_SCHEMA,
     Required("path"): str,
+    Output.PARAM_CLOUD: CLOUD_SCHEMA,
     Output.PARAM_FILES: [DIR_FILES_SCHEMA],
 }
 LOCK_FILE_STAGE_SCHEMA = {
@@ -83,9 +90,7 @@ STAGE_DEFINITION = {
     Optional(StageParams.PARAM_DESC): str,
     Optional(StageParams.PARAM_ALWAYS_CHANGED): bool,
     Optional(StageParams.PARAM_OUTS): [Any(str, OUT_PSTAGE_DETAILED_SCHEMA)],
-    Optional(StageParams.PARAM_METRICS): [
-        Any(str, OUT_PSTAGE_DETAILED_SCHEMA)
-    ],
+    Optional(StageParams.PARAM_METRICS): [Any(str, OUT_PSTAGE_DETAILED_SCHEMA)],
     Optional(StageParams.PARAM_PLOTS): [Any(str, PLOT_PSTAGE_SCHEMA)],
 }
 
@@ -93,10 +98,7 @@ STAGE_DEFINITION = {
 def either_or(primary, fallback, fallback_includes=None):
     def validator(data):
         schema = primary
-        if (
-            isinstance(data, Mapping)
-            and set(fallback_includes or []) & data.keys()
-        ):
+        if isinstance(data, Mapping) and set(fallback_includes or []) & data.keys():
             schema = fallback
         return Schema(schema)(data)
 

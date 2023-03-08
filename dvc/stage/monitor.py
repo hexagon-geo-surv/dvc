@@ -29,7 +29,7 @@ class MonitorTask:
         raise NotImplementedError
 
     @property
-    def SIGNAL_FILE(self) -> str:
+    def SIGNAL_FILE(self) -> str:  # noqa: N802
         raise NotImplementedError
 
     @property
@@ -49,14 +49,10 @@ class CheckpointTask(MonitorTask):
     SIGNAL_FILE = "DVC_CHECKPOINT"
     error_cls = CheckpointKilledError
 
-    def __init__(
-        self, stage: "Stage", callback_func: Callable, proc: subprocess.Popen
-    ):
+    def __init__(self, stage: "Stage", callback_func: Callable, proc: subprocess.Popen):
         super().__init__(
             stage,
-            functools.partial(
-                CheckpointTask._run_callback, stage, callback_func
-            ),
+            functools.partial(CheckpointTask._run_callback, stage, callback_func),
             proc,
         )
 
@@ -110,7 +106,7 @@ class Monitor:
                     try:
                         task.execute()
                         task.updated.set()
-                    except Exception:  # noqa: BLE001, pylint: disable=W0703
+                    except Exception:  # pylint: disable=broad-except
                         logger.exception(
                             "Error running '%s' task, '%s' will be aborted",
                             task.name,
@@ -118,9 +114,7 @@ class Monitor:
                         )
                         Monitor.kill(task.proc)
                     finally:
-                        logger.debug(
-                            "Removing signal file for '%s' task", task.name
-                        )
+                        logger.debug("Removing signal file for '%s' task", task.name)
                         os.remove(task.signal_path)
 
             if done.wait(Monitor.AWAIT):

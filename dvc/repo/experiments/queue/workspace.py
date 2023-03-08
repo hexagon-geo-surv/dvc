@@ -10,23 +10,21 @@ from voluptuous import Invalid
 from dvc.exceptions import DvcException
 from dvc.lock import make_lock
 from dvc.repo.experiments.exceptions import ExpQueueEmptyError
-from dvc.repo.experiments.executor.base import (
-    BaseExecutor,
-    ExecutorInfo,
-    ExecutorResult,
-    TaskStatus,
-)
+from dvc.repo.experiments.executor.base import ExecutorInfo, TaskStatus
 from dvc.repo.experiments.executor.local import WorkspaceExecutor
 from dvc.repo.experiments.refs import EXEC_BRANCH, WORKSPACE_STASH
-from dvc.repo.experiments.utils import get_exp_rwlock, to_studio_params
+from dvc.repo.experiments.utils import get_exp_rwlock
 from dvc.rwlock import RWLOCK_FILE, RWLOCK_LOCK, SCHEMA
 from dvc.utils import relpath
 from dvc.utils.fs import remove
 
-from .base import BaseStashQueue, QueueDoneResult, QueueEntry, QueueGetResult
+from .base import BaseStashQueue, QueueEntry, QueueGetResult
 
 if TYPE_CHECKING:
     from dvc.repo.experiments import Experiments
+    from dvc.repo.experiments.executor.base import BaseExecutor, ExecutorResult
+
+    from .base import QueueDoneResult
 
 logger = logging.getLogger(__name__)
 
@@ -74,13 +72,13 @@ class WorkspaceQueue(BaseStashQueue):
         # need to be handled via the queue
         raise NotImplementedError
 
-    def iter_done(self) -> Generator[QueueDoneResult, None, None]:
+    def iter_done(self) -> Generator["QueueDoneResult", None, None]:
         raise NotImplementedError
 
-    def iter_failed(self) -> Generator[QueueDoneResult, None, None]:
+    def iter_failed(self) -> Generator["QueueDoneResult", None, None]:
         raise NotImplementedError
 
-    def iter_success(self) -> Generator[QueueDoneResult, None, None]:
+    def iter_success(self) -> Generator["QueueDoneResult", None, None]:
         raise NotImplementedError
 
     def reproduce(self) -> Dict[str, Dict[str, str]]:
@@ -94,10 +92,8 @@ class WorkspaceQueue(BaseStashQueue):
         return results
 
     def _reproduce_entry(
-        self, entry: QueueEntry, executor: BaseExecutor
+        self, entry: QueueEntry, executor: "BaseExecutor"
     ) -> Dict[str, Dict[str, str]]:
-        from dvc_studio_client.post_live_metrics import post_live_metrics
-
         from dvc.stage.monitor import CheckpointKilledError
 
         results: Dict[str, Dict[str, str]] = defaultdict(dict)
@@ -105,13 +101,6 @@ class WorkspaceQueue(BaseStashQueue):
         infofile = self.get_infofile_path(exec_name)
         try:
             rev = entry.stash_rev
-            post_live_metrics(
-                "start",
-                executor.info.baseline_rev,
-                executor.info.name,
-                "dvc",
-                params=to_studio_params(self.repo.params.show()),
-            )
             exec_result = executor.reproduce(
                 info=executor.info,
                 rev=rev,
@@ -120,14 +109,10 @@ class WorkspaceQueue(BaseStashQueue):
                 log_errors=not isinstance(executor, WorkspaceExecutor),
             )
             if not exec_result.exp_hash:
-                raise DvcException(
-                    f"Failed to reproduce experiment '{rev[:7]}'"
-                )
+                raise DvcException(f"Failed to reproduce experiment '{rev[:7]}'")
             if exec_result.ref_info:
                 results[rev].update(
-                    self.collect_executor(
-                        self.repo.experiments, executor, exec_result
-                    )
+                    self.collect_executor(self.repo.experiments, executor, exec_result)
                 )
         except CheckpointKilledError:
             # Checkpoint errors have already been logged
@@ -135,25 +120,16 @@ class WorkspaceQueue(BaseStashQueue):
         except DvcException:
             raise
         except Exception as exc:  # noqa: BLE001
-            raise DvcException(
-                f"Failed to reproduce experiment '{rev[:7]}'"
-            ) from exc
+            raise DvcException(f"Failed to reproduce experiment '{rev[:7]}'") from exc
         finally:
-            post_live_metrics(
-                "done",
-                executor.info.baseline_rev,
-                executor.info.name,
-                "dvc",
-                experiment_rev=first(results.get(rev, {})),
-            )
             executor.cleanup(infofile)
         return results
 
     @staticmethod
     def collect_executor(  # pylint: disable=unused-argument
         exp: "Experiments",
-        executor: BaseExecutor,  # noqa: ARG004
-        exec_result: ExecutorResult,
+        executor: "BaseExecutor",  # noqa: ARG004
+        exec_result: "ExecutorResult",
     ) -> Dict[str, str]:
         results: Dict[str, str] = {}
         exp_rev = exp.scm.get_ref(EXEC_BRANCH)
@@ -164,7 +140,7 @@ class WorkspaceQueue(BaseStashQueue):
 
         return results
 
-    def get_result(self, entry: QueueEntry) -> Optional[ExecutorResult]:
+    def get_result(self, entry: QueueEntry) -> Optional["ExecutorResult"]:
         raise NotImplementedError
 
     def kill(self, revs: Collection[str]) -> None:
@@ -216,8 +192,7 @@ class WorkspaceQueue(BaseStashQueue):
                     return True
                 cmd = lock_info["cmd"]
                 logger.warning(
-                    "Process '%s' with (Pid %s), in RWLock-file '%s'"
-                    " had been killed.",
+                    "Process '%s' with (Pid %s), in RWLock-file '%s' had been killed.",
                     cmd,
                     pid,
                     relpath(path),
@@ -226,20 +201,20 @@ class WorkspaceQueue(BaseStashQueue):
                 return False
             except json.JSONDecodeError:
                 logger.warning(
-                    "Unable to read RWLock-file '%s'. JSON structure is"
-                    " corrupted",
+                    "Unable to read RWLock-file '%s'. JSON structure is corrupted",
                     relpath(path),
                 )
             except Invalid:
                 logger.warning("RWLock-file '%s' format error.", relpath(path))
             if autocorrect:
-                logger.warning(
-                    "Delete corrupted RWLock-file '%s'", relpath(path)
-                )
+                logger.warning("Delete corrupted RWLock-file '%s'", relpath(path))
                 remove(path)
             return False
 
-    def get_running_exps(self, fetch_refs: bool = True) -> Dict[str, Dict]:
+    def get_running_exps(
+        self,
+        fetch_refs: bool = True,  # noqa: ARG002
+    ) -> Dict[str, Dict]:
         from dvc.utils.serialize import load_json
 
         assert self._EXEC_NAME

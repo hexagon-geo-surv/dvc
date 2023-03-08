@@ -9,12 +9,12 @@ from typing import TYPE_CHECKING, Dict, Optional
 from funcy import compact, memoize, re_find
 
 from dvc.exceptions import DvcException, NotDvcRepoError
-from dvc.types import DictStrAny, StrPath
 
 from .utils.objects import cached_property
 
 if TYPE_CHECKING:
     from dvc.fs import FileSystem
+    from dvc.types import DictStrAny, StrPath
 
 logger = logging.getLogger(__name__)
 
@@ -92,10 +92,10 @@ class Config(dict):
 
     def __init__(
         self,
-        dvc_dir: Optional[StrPath] = None,
+        dvc_dir: Optional["StrPath"] = None,
         validate: bool = True,
         fs: Optional["FileSystem"] = None,
-        config: Optional[DictStrAny] = None,
+        config: Optional["DictStrAny"] = None,
     ):  # pylint: disable=super-init-not-called
         from dvc.fs import LocalFileSystem
 
@@ -117,7 +117,7 @@ class Config(dict):
 
     @classmethod
     def get_dir(cls, level):
-        from appdirs import site_config_dir, user_config_dir
+        from platformdirs import site_config_dir, user_config_dir
 
         assert level in ("global", "system")
 
@@ -153,7 +153,7 @@ class Config(dict):
         with open(config_file, "w+", encoding="utf-8"):
             return Config(dvc_dir)
 
-    def load(self, validate: bool = True, config: Optional[DictStrAny] = None):
+    def load(self, validate: bool = True, config: Optional["DictStrAny"] = None):
         """Loads config from all the config files.
 
         Raises:
@@ -169,10 +169,6 @@ class Config(dict):
 
         self.clear()
         self.update(conf)
-
-        # Add resolved default cache.dir
-        if not self["cache"].get("dir") and self.dvc_dir:
-            self["cache"]["dir"] = os.path.join(self.dvc_dir, "cache")
 
     def _get_fs(self, level):
         # NOTE: this might be a Gitfs, which doesn't see things outside of
@@ -374,6 +370,5 @@ def merge(into, update):
 
 def _lower_keys(data):
     return {
-        k.lower(): _lower_keys(v) if isinstance(v, dict) else v
-        for k, v in data.items()
+        k.lower(): _lower_keys(v) if isinstance(v, dict) else v for k, v in data.items()
     }

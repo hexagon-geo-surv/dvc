@@ -119,10 +119,7 @@ def pytest_runtest_setup(item):
     for marker in item.iter_markers():
         item.config.dvc_config.apply_marker(marker)
 
-    if (
-        "CI" in os.environ
-        and item.get_closest_marker("needs_internet") is not None
-    ):
+    if "CI" in os.environ and item.get_closest_marker("needs_internet") is not None:
         # remotes that need internet connection might be flaky,
         # so we rerun them in case it fails.
         item.add_marker(pytest.mark.flaky(max_runs=5, min_passes=1))
@@ -177,22 +174,20 @@ def mocked_webbrowser_open(mocker):
     mocker.patch("webbrowser.open")
 
 
-@pytest.fixture(autouse=True)
-def isolate(tmp_path_factory, monkeypatch) -> None:
+@pytest.fixture(scope="session", autouse=True)
+def isolate(tmp_path_factory):
     path = tmp_path_factory.mktemp("mock")
     home_dir = path / "home"
     home_dir.mkdir()
 
+    monkeypatch = pytest.MonkeyPatch()
     if sys.platform == "win32":
         home_drive, home_path = os.path.splitdrive(home_dir)
         monkeypatch.setenv("USERPROFILE", str(home_dir))
         monkeypatch.setenv("HOMEDRIVE", home_drive)
         monkeypatch.setenv("HOMEPATH", home_path)
 
-        for env_var, sub_path in (
-            ("APPDATA", "Roaming"),
-            ("LOCALAPPDATA", "Local"),
-        ):
+        for env_var, sub_path in (("APPDATA", "Roaming"), ("LOCALAPPDATA", "Local")):
             path = home_dir / "AppData" / sub_path
             path.mkdir(parents=True)
             monkeypatch.setenv(env_var, os.fspath(path))
@@ -212,6 +207,8 @@ defaultBranch=master
     import pygit2
 
     pygit2.settings.search_path[pygit2.GIT_CONFIG_LEVEL_GLOBAL] = str(home_dir)
+    yield
+    monkeypatch.undo()
 
 
 @pytest.fixture
@@ -250,10 +247,7 @@ def run_copy_metrics(tmp_dir, copy_script):
 
 
 @pytest.fixture(autouse=True)
-def gc_collect_on_dvc_close_on_win_311(mocker):
-    if sys.version_info < (3, 11) and os.name != "nt":
-        return
-
+def gc_collect_on_dvc_close_on_win(mocker):
     from dvc.repo import Repo
 
     close = Repo.close
@@ -262,4 +256,5 @@ def gc_collect_on_dvc_close_on_win_311(mocker):
         close(repo)
         gc.collect()
 
-    mocker.patch("dvc.repo.Repo.close", wrapped)
+    if os.name == "nt":
+        mocker.patch("dvc.repo.Repo.close", wrapped)

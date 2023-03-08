@@ -2,7 +2,7 @@ import logging
 import os
 import re
 import time
-from typing import Dict, Iterable, Optional
+from typing import TYPE_CHECKING, Dict, Iterable, Optional
 
 from funcy import chain, first
 
@@ -11,6 +11,7 @@ from dvc.ui import ui
 from dvc.utils import relpath
 from dvc.utils.objects import cached_property
 
+from .cache import ExpCache
 from .exceptions import (
     BaselineMismatchError,
     ExperimentExistsError,
@@ -18,11 +19,11 @@ from .exceptions import (
     MultipleBranchError,
 )
 from .executor.base import BaseExecutor
-from .queue.base import BaseStashQueue, QueueEntry
 from .queue.celery import LocalCeleryQueue
 from .queue.tempdir import TempDirQueue
 from .queue.workspace import WorkspaceQueue
 from .refs import (
+    APPLY_STASH,
     CELERY_FAILED_STASH,
     CELERY_STASH,
     EXEC_APPLY,
@@ -32,8 +33,12 @@ from .refs import (
     WORKSPACE_STASH,
     ExpRefInfo,
 )
-from .stash import ExpStashEntry
+from .stash import ApplyStash
 from .utils import check_ref_format, exp_refs_by_rev, unlocked_repo
+
+if TYPE_CHECKING:
+    from .queue.base import BaseStashQueue, QueueEntry
+    from .stash import ExpStashEntry
 
 logger = logging.getLogger(__name__)
 
@@ -87,8 +92,16 @@ class Experiments:
     def celery_queue(self) -> LocalCeleryQueue:
         return LocalCeleryQueue(self.repo, CELERY_STASH, CELERY_FAILED_STASH)
 
+    @cached_property
+    def apply_stash(self) -> ApplyStash:
+        return ApplyStash(self.scm, APPLY_STASH)
+
+    @cached_property
+    def cache(self) -> ExpCache:
+        return ExpCache(self.repo)
+
     @property
-    def stash_revs(self) -> Dict[str, ExpStashEntry]:
+    def stash_revs(self) -> Dict[str, "ExpStashEntry"]:
         revs = {}
         for queue in (self.workspace_queue, self.celery_queue):
             revs.update(queue.stash.stash_revs)
@@ -97,20 +110,10 @@ class Experiments:
     def reproduce_one(
         self,
         tmp_dir: bool = False,
-        machine: Optional[str] = None,
         **kwargs,
     ):
         """Reproduce and checkout a single (standalone) experiment."""
-        if not (tmp_dir or machine):
-            staged, _, _ = self.scm.status(untracked_files="no")
-            if staged:
-                logger.warning(
-                    "Your workspace contains staged Git changes which will be "
-                    "unstaged before running this experiment."
-                )
-                self.scm.reset()
-
-        exp_queue: BaseStashQueue = (
+        exp_queue: "BaseStashQueue" = (
             self.tempdir_queue if tmp_dir else self.workspace_queue
         )
         self.queue_one(exp_queue, **kwargs)
@@ -122,11 +125,11 @@ class Experiments:
 
     def queue_one(
         self,
-        queue: BaseStashQueue,
+        queue: "BaseStashQueue",
         checkpoint_resume: Optional[str] = None,
         reset: bool = False,
         **kwargs,
-    ) -> QueueEntry:
+    ) -> "QueueEntry":
         """Queue a single experiment."""
         if reset:
             self.reset_checkpoints()
@@ -165,7 +168,7 @@ class Experiments:
         return None
 
     def reproduce_celery(  # noqa: C901
-        self, entries: Optional[Iterable[QueueEntry]] = None, **kwargs
+        self, entries: Optional[Iterable["QueueEntry"]] = None, **kwargs
     ) -> Dict[str, str]:
         results: Dict[str, str] = {}
         if entries is None:
@@ -241,11 +244,11 @@ class Experiments:
 
     def new(
         self,
-        queue: BaseStashQueue,
+        queue: "BaseStashQueue",
         *args,
         checkpoint_resume: Optional[str] = None,
         **kwargs,
-    ) -> QueueEntry:
+    ) -> "QueueEntry":
         """Create and enqueue a new experiment.
 
         Experiment will be derived from the current workspace.
@@ -269,31 +272,26 @@ class Experiments:
 
     def _resume_checkpoint(
         self,
-        queue: BaseStashQueue,
+        queue: "BaseStashQueue",
         *args,
         resume_rev: Optional[str] = None,
         **kwargs,
-    ) -> QueueEntry:
+    ) -> "QueueEntry":
         """Create and queue a resumed checkpoint experiment."""
         assert resume_rev
 
         branch: Optional[str] = None
         try:
             allow_multiple = bool(kwargs.get("params", None))
-            branch = self.get_branch_by_rev(
-                resume_rev, allow_multiple=allow_multiple
-            )
+            branch = self.get_branch_by_rev(resume_rev, allow_multiple=allow_multiple)
             if not branch:
                 raise DvcException(
-                    "Could not find checkpoint experiment "
-                    f"'{resume_rev[:7]}'"
+                    f"Could not find checkpoint experiment '{resume_rev[:7]}'"
                 )
             baseline_rev = self._get_baseline(branch)
         except MultipleBranchError as exc:
             baselines = {
-                info.baseline_sha
-                for info in exc.ref_infos
-                if info.baseline_sha
+                info.baseline_sha for info in exc.ref_infos if info.baseline_sha
             }
             if len(baselines) == 1:
                 baseline_rev = baselines.pop()
@@ -342,9 +340,7 @@ class Experiments:
         self.scm.remove_ref(EXEC_APPLY)
 
     @unlocked_repo
-    def _reproduce_queue(
-        self, queue: BaseStashQueue, **kwargs
-    ) -> Dict[str, str]:
+    def _reproduce_queue(self, queue: "BaseStashQueue", **kwargs) -> Dict[str, str]:
         """Reproduce queued experiments.
 
         Arguments:
@@ -417,9 +413,7 @@ class Experiments:
         """
         result: Dict[str, Optional[str]] = {}
         exclude = f"{EXEC_NAMESPACE}/*"
-        ref_dict = self.scm.describe(
-            revs, base=EXPS_NAMESPACE, exclude=exclude
-        )
+        ref_dict = self.scm.describe(revs, base=EXPS_NAMESPACE, exclude=exclude)
         for rev in revs:
             name: Optional[str] = None
             ref = ref_dict[rev]
@@ -503,3 +497,8 @@ class Experiments:
         from dvc.repo.experiments.remove import remove
 
         return remove(self.repo, *args, **kwargs)
+
+    def clean(self, *args, **kwargs):
+        from dvc.repo.experiments.clean import clean
+
+        return clean(self.repo, *args, **kwargs)

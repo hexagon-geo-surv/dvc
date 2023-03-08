@@ -22,14 +22,11 @@ def _make_cmd(executable, cmd):
         return cmd
     opts = {"zsh": ["--no-rcs"], "bash": ["--noprofile", "--norc"]}
     name = os.path.basename(executable).lower()
-    return [executable] + opts.get(name, []) + ["-c", cmd]
+    return [executable, *opts.get(name, []), "-c", cmd]
 
 
 def warn_if_fish(executable):
-    if (
-        executable is None
-        or os.path.basename(os.path.realpath(executable)) != "fish"
-    ):
+    if executable is None or os.path.basename(os.path.realpath(executable)) != "fish":
         return
 
     logger.warning(
@@ -112,7 +109,6 @@ def _run(stage: "Stage", executable, cmd, checkpoint_func, **kwargs):
 
 
 def _get_monitor_tasks(stage, checkpoint_func, proc) -> List[CheckpointTask]:
-
     result = []
     if checkpoint_func:
         result.append(CheckpointTask(stage, checkpoint_func, proc))
@@ -123,9 +119,7 @@ def _get_monitor_tasks(stage, checkpoint_func, proc) -> List[CheckpointTask]:
 def cmd_run(stage, dry=False, checkpoint_func=None, run_env=None):
     logger.info("Running stage '%s':", stage.addressing)
     commands = _enforce_cmd_list(stage.cmd)
-    kwargs = prepare_kwargs(
-        stage, checkpoint_func=checkpoint_func, run_env=run_env
-    )
+    kwargs = prepare_kwargs(stage, checkpoint_func=checkpoint_func, run_env=run_env)
     executable = get_executable()
 
     if not dry:

@@ -2,9 +2,9 @@ import logging
 import os
 import typing
 from collections import defaultdict
-from typing import Dict, cast
+from typing import Dict
 
-import dpath.util
+import dpath
 from voluptuous import Any
 
 from dvc.exceptions import DvcException
@@ -87,17 +87,17 @@ class ParamsDependency(Dependency):
         if flatten:
             for param in self.params:
                 try:
-                    ret[param] = dpath.util.get(config, param, separator=".")
+                    ret[param] = dpath.get(config, param, separator=".")
                 except KeyError:
                     continue
             return ret
 
-        from dpath.util import merge
+        from dpath import merge
 
         for param in self.params:
             merge(
                 ret,
-                dpath.util.search(config, param, separator="."),
+                dpath.search(config, param, separator="."),
                 separator=".",
             )
         return ret
@@ -111,7 +111,8 @@ class ParamsDependency(Dependency):
         from funcy import ldistinct
 
         status: Dict[str, Any] = defaultdict(dict)
-        info = cast(dict, self.hash_info.value) if self.hash_info else {}
+        assert isinstance(self.hash_info.value, dict)
+        info = self.hash_info.value if self.hash_info else {}
         actual = self.read_params()
 
         # NOTE: we want to preserve the order of params as specified in the
@@ -125,9 +126,13 @@ class ParamsDependency(Dependency):
             elif param not in info:
                 st = "new"
             elif actual[param] != info[param]:
+                if (
+                    isinstance(actual[param], tuple)
+                    and list(actual[param]) == info[param]
+                ):
+                    continue
                 st = "modified"
             else:
-                assert actual[param] == info[param]
                 continue
 
             status[str(self)][param] = st
@@ -150,9 +155,7 @@ class ParamsDependency(Dependency):
         try:
             return load_path(self.fs_path, self.repo.fs)
         except ParseError as exc:
-            raise BadParamFileError(
-                f"Unable to read parameters from '{self}'"
-            ) from exc
+            raise BadParamFileError(f"Unable to read parameters from '{self}'") from exc
 
     def get_hash(self):
         info = self.read_params()

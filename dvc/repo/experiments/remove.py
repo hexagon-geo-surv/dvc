@@ -3,19 +3,17 @@ from typing import TYPE_CHECKING, Dict, Iterable, List, Optional, Union
 
 from dvc.repo import locked
 from dvc.repo.scm_context import scm_context
-from dvc.scm import iter_revs
+from dvc.scm import Git, iter_revs
 
 from .exceptions import UnresolvedExpNamesError
-from .queue.base import QueueEntry
-from .refs import ExpRefInfo
 from .utils import exp_refs, exp_refs_by_baseline, push_refspec
 
 if TYPE_CHECKING:
     from dvc.repo import Repo
     from dvc.repo.experiments.queue.celery import LocalCeleryQueue
-    from dvc.scm import Git
 
-    from .queue.base import ExpRefAndQueueEntry
+    from .queue.base import ExpRefAndQueueEntry, QueueEntry
+    from .refs import ExpRefInfo
 
 
 logger = logging.getLogger(__name__)
@@ -39,6 +37,8 @@ def remove(  # noqa: C901
 
     if queue:
         removed.extend(celery_queue.clear(queued=True))
+
+    assert isinstance(repo.scm, Git)
     if all_commits:
         removed.extend(
             _remove_commited_exps(
@@ -99,7 +99,7 @@ def _resolve_exp_by_baseline(
 
 
 def _remove_commited_exps(
-    scm: "Git", exp_refs_list: Iterable[ExpRefInfo], remote: Optional[str]
+    scm: "Git", exp_refs_list: Iterable["ExpRefInfo"], remote: Optional[str]
 ) -> List[str]:
     if remote:
         from dvc.scm import TqdmGit

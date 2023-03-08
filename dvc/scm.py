@@ -2,7 +2,16 @@
 import os
 from contextlib import contextmanager
 from functools import partial
-from typing import TYPE_CHECKING, Iterator, List, Mapping, Optional
+from typing import (
+    TYPE_CHECKING,
+    Iterator,
+    List,
+    Literal,
+    Mapping,
+    Optional,
+    Union,
+    overload,
+)
 
 from funcy import group_by
 from scmrepo.base import Base  # noqa: F401, pylint: disable=unused-import
@@ -11,7 +20,6 @@ from scmrepo.noscm import NoSCM
 
 from dvc.exceptions import DvcException
 from dvc.progress import Tqdm
-from dvc.utils import format_link
 
 if TYPE_CHECKING:
     from scmrepo.progress import GitProgressEvent
@@ -49,25 +57,6 @@ class GitAuthError(SCMError):
         super().__init__(f"{reason}\n{doc}")
 
 
-class GitMergeError(SCMError):
-    def __init__(self, msg: str, scm: Optional["Git"] = None) -> None:
-        if scm and self._is_shallow(scm):
-            url = format_link(
-                "https://dvc.org/doc/user-guide/troubleshooting#git-shallow"
-            )
-            msg = (
-                f"{msg}: `dvc exp` does not work in shallow Git repos. "
-                f"See {url} for more information."
-            )
-        super().__init__(msg)
-
-    @staticmethod
-    def _is_shallow(scm: "Git") -> bool:
-        if os.path.exists(os.path.join(scm.root_dir, Git.GIT_DIR, "shallow")):
-            return True
-        return False
-
-
 @contextmanager
 def map_scm_exception(with_cause: bool = False) -> Iterator[None]:
     from scmrepo.exceptions import SCMError as InternalSCMError
@@ -81,8 +70,38 @@ def map_scm_exception(with_cause: bool = False) -> Iterator[None]:
         raise into
 
 
+@overload
 def SCM(
-    root_dir, search_parent_directories=True, no_scm=False
+    root_dir: str,
+    *,
+    search_parent_directories: bool = ...,
+    no_scm: Literal[False] = ...,
+) -> "Git":
+    ...
+
+
+@overload
+def SCM(
+    root_dir: str,
+    *,
+    search_parent_directories: bool = ...,
+    no_scm: Literal[True],
+) -> "NoSCM":
+    ...
+
+
+@overload
+def SCM(
+    root_dir: str,
+    *,
+    search_parent_directories: bool = ...,
+    no_scm: bool = ...,
+) -> Union["Git", "NoSCM"]:
+    ...
+
+
+def SCM(
+    root_dir, *, search_parent_directories=True, no_scm=False
 ):  # pylint: disable=invalid-name
     """Returns SCM instance that corresponds to a repo at the specified
     path.
@@ -99,16 +118,12 @@ def SCM(
     with map_scm_exception():
         if no_scm:
             return NoSCM(root_dir, _raise_not_implemented_as=NoSCMError)
-        return Git(
-            root_dir, search_parent_directories=search_parent_directories
-        )
+        return Git(root_dir, search_parent_directories=search_parent_directories)
 
 
 class TqdmGit(Tqdm):
     BAR_FMT = (
-        "{desc}|{bar}|"
-        "{postfix[info]}{n_fmt}/{total_fmt}"
-        " [{elapsed}, {rate_fmt:>11}]"
+        "{desc}|{bar}|{postfix[info]}{n_fmt}/{total_fmt} [{elapsed}, {rate_fmt:>11}]"
     )
 
     def __init__(self, *args, **kwargs):
@@ -161,10 +176,7 @@ def resolve_rev(scm: "Git", rev: str) -> str:
         # `scm` will only resolve git branch and tag names,
         # if rev is not a sha it may be an abbreviated experiment name
         if not (rev == "HEAD" or rev.startswith("refs/")):
-            from dvc.repo.experiments.utils import (
-                AmbiguousExpRefInfo,
-                resolve_name,
-            )
+            from dvc.repo.experiments.utils import AmbiguousExpRefInfo, resolve_name
 
             try:
                 ref_infos = resolve_name(scm, rev).get(rev)
@@ -195,7 +207,7 @@ def _get_n_commits(scm: "Git", revs: List[str], num: int) -> List[str]:
     return results
 
 
-def iter_revs(  # noqa: C901
+def iter_revs(
     scm: "Git",
     revs: Optional[List[str]] = None,
     num: int = 1,
@@ -236,15 +248,11 @@ def iter_revs(  # noqa: C901
         if commit_date:
             from datetime import datetime
 
-            commit_datestamp = datetime.strptime(
-                commit_date, "%Y-%m-%d"
-            ).timestamp()
+            commit_datestamp = datetime.strptime(commit_date, "%Y-%m-%d").timestamp()
 
             def _time_filter(rev):
                 try:
-                    if scm.resolve_commit(rev).commit_date >= commit_datestamp:
-                        return True
-                    return False
+                    return scm.resolve_commit(rev).commit_time >= commit_datestamp
                 except _SCMError:
                     return True
 

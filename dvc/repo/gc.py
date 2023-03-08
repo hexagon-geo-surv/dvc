@@ -19,13 +19,11 @@ def _validate_args(**kwargs):
             "needs to be set."
         )
     if kwargs.get("num") and not kwargs.get("rev"):
-        raise InvalidArgumentError(
-            "`--num` can only be used alongside `--rev`"
-        )
+        raise InvalidArgumentError("`--num` can only be used alongside `--rev`")
 
 
 @locked
-def gc(
+def gc(  # noqa: PLR0913
     self: "Repo",
     all_branches: bool = False,
     cloud: bool = False,
@@ -42,7 +40,6 @@ def gc(
     rev: Optional[str] = None,
     num: Optional[int] = None,
 ):
-
     # require `workspace` to be true to come into effect.
     # assume `workspace` to be enabled if any of `all_tags`, `all_commits`,
     # `all_experiments` or `all_branches` are enabled.
@@ -72,7 +69,7 @@ def gc(
         for repo in all_repos:
             stack.enter_context(repo.lock)
 
-        for repo in all_repos + [self]:
+        for repo in [*all_repos, self]:
             for obj_ids in repo.used_objs(
                 all_branches=all_branches,
                 with_deps=with_deps,
@@ -88,7 +85,7 @@ def gc(
             ).values():
                 used_obj_ids.update(obj_ids)
 
-    for scheme, odb in self.odb.by_scheme():
+    for scheme, odb in self.cache.by_scheme():
         if not odb:
             continue
 

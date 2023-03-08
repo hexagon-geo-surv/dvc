@@ -3,14 +3,17 @@ import os
 import re
 from collections import namedtuple
 from itertools import chain, groupby, takewhile
-from typing import List, Optional
+from typing import TYPE_CHECKING, List, Optional
 
 from pathspec.patterns import GitWildMatchPattern
 from pathspec.util import normalize_file
 from pygtrie import Trie
 
-from dvc.fs import AnyFSPath, FileSystem, Schemes, localfs
+from dvc.fs import Schemes, localfs
 from dvc.pathspec_math import PatternInfo, merge_patterns
+
+if TYPE_CHECKING:
+    from dvc.fs import AnyFSPath, FileSystem
 
 logger = logging.getLogger(__name__)
 
@@ -27,9 +30,7 @@ class DvcIgnorePatterns(DvcIgnore):
         from pathspec.patterns.gitwildmatch import _DIR_MARK
 
         if pattern_list and isinstance(pattern_list[0], str):
-            pattern_list = [
-                PatternInfo(pattern, "") for pattern in pattern_list
-            ]
+            pattern_list = [PatternInfo(pattern, "") for pattern in pattern_list]
 
         self.sep = sep
         self.pattern_list = pattern_list
@@ -37,20 +38,14 @@ class DvcIgnorePatterns(DvcIgnore):
 
         self.regex_pattern_list = []
         for count, pattern in enumerate(pattern_list):
-            pattern, group = GitWildMatchPattern.pattern_to_regex(
-                pattern.patterns
-            )
+            pattern, group = GitWildMatchPattern.pattern_to_regex(pattern.patterns)
             if pattern:
-                pattern = pattern.replace(
-                    f"<{_DIR_MARK}>", f"<{_DIR_MARK}{count}>"
-                )
+                pattern = pattern.replace(f"<{_DIR_MARK}>", f"<{_DIR_MARK}{count}>")
                 self.regex_pattern_list.append((pattern, group))
 
         self.ignore_spec = [
             (ignore, re.compile("|".join(item[0] for item in group)))
-            for ignore, group in groupby(
-                self.regex_pattern_list, lambda x: x[1]
-            )
+            for ignore, group in groupby(self.regex_pattern_list, lambda x: x[1])
             if ignore is not None
         ]
 
@@ -61,9 +56,7 @@ class DvcIgnorePatterns(DvcIgnore):
         with fs.open(path, encoding="utf-8") as fobj:
             path_spec_lines = [
                 PatternInfo(line, f"{name}:{line_no + 1}:{line}")
-                for line_no, line in enumerate(
-                    map(str.strip, fobj.readlines())
-                )
+                for line_no, line in enumerate(map(str.strip, fobj.readlines()))
                 if line and not (line.strip().startswith("#"))
             ]
 
@@ -155,9 +148,7 @@ class DvcIgnorePatterns(DvcIgnore):
         return bool(self.pattern_list)
 
 
-CheckIgnoreResult = namedtuple(
-    "CheckIgnoreResult", ["file", "match", "patterns"]
-)
+CheckIgnoreResult = namedtuple("CheckIgnoreResult", ["file", "match", "patterns"])
 
 
 def _no_match(path):
@@ -246,9 +237,7 @@ class DvcIgnoreFilter:
                     dnames = []
 
             for dname in dnames:
-                self._update_sub_repo(
-                    self.fs.path.join(dirname, dname), ignore_trie
-                )
+                self._update_sub_repo(self.fs.path.join(dirname, dname), ignore_trie)
 
     def _update_sub_repo(self, path, ignore_trie: Trie):
         from dvc.repo import Repo
@@ -306,7 +295,7 @@ class DvcIgnoreFilter:
 
         return [fs_dict[name] for name in chain(dirs, nondirs)]
 
-    def walk(self, fs: FileSystem, path: AnyFSPath, **kwargs):
+    def walk(self, fs: "FileSystem", path: "AnyFSPath", **kwargs):
         detail = kwargs.get("detail", False)
         ignore_subrepos = kwargs.pop("ignore_subrepos", True)
         if fs.protocol == Schemes.LOCAL:
@@ -330,7 +319,7 @@ class DvcIgnoreFilter:
         else:
             yield from fs.walk(path, **kwargs)
 
-    def find(self, fs: FileSystem, path: AnyFSPath, **kwargs):
+    def find(self, fs: "FileSystem", path: "AnyFSPath", **kwargs):
         if fs.protocol == Schemes.LOCAL:
             for root, _, files in self.walk(fs, path, **kwargs):
                 for file in files:
@@ -406,9 +395,7 @@ class DvcIgnoreFilter:
         # https://github.com/iterative/dvc/issues/5046
         full_target = self.fs.path.abspath(target)
         if not self._outside_repo(full_target):
-            dirname, basename = self.fs.path.split(
-                self.fs.path.normpath(full_target)
-            )
+            dirname, basename = self.fs.path.split(self.fs.path.normpath(full_target))
             pattern = self._get_trie_pattern(dirname)
             if pattern:
                 matches = pattern.matches(
@@ -420,7 +407,7 @@ class DvcIgnoreFilter:
         return _no_match(target)
 
     def is_ignored(
-        self, fs: FileSystem, path: str, ignore_subrepos: bool = True
+        self, fs: "FileSystem", path: str, ignore_subrepos: bool = True
     ) -> bool:
         # NOTE: can't use self.check_ignore(path).match for now, see
         # https://github.com/iterative/dvc/issues/4555
@@ -430,9 +417,9 @@ class DvcIgnoreFilter:
             return self.is_ignored_file(path, ignore_subrepos)
         if fs.isdir(path):
             return self.is_ignored_dir(path, ignore_subrepos)
-        return self.is_ignored_file(
+        return self.is_ignored_file(path, ignore_subrepos) or self.is_ignored_dir(
             path, ignore_subrepos
-        ) or self.is_ignored_dir(path, ignore_subrepos)
+        )
 
 
 def init(path):

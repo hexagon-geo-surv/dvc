@@ -5,7 +5,6 @@ from tempfile import mkdtemp
 from typing import TYPE_CHECKING, Optional, Union
 
 from funcy import retry
-from scmrepo.exceptions import SCMError as _SCMError
 from shortuuid import uuid
 
 from dvc.lock import LockError
@@ -18,19 +17,17 @@ from dvc.repo.experiments.refs import (
     EXEC_MERGE,
     EXEC_NAMESPACE,
     EXPS_TEMP,
-    ExpRefInfo,
 )
 from dvc.repo.experiments.utils import EXEC_TMP_DIR, get_exp_rwlock
-from dvc.scm import SCM, GitMergeError
+from dvc.scm import SCM, Git
 from dvc.utils.fs import remove
 from dvc.utils.objects import cached_property
 
 from .base import BaseExecutor, TaskStatus
 
 if TYPE_CHECKING:
-    from scmrepo.git import Git
-
     from dvc.repo import Repo
+    from dvc.repo.experiments.refs import ExpRefInfo
     from dvc.repo.experiments.stash import ExpStashEntry
     from dvc.scm import NoSCM
 
@@ -131,14 +128,12 @@ class TempDirExecutor(BaseLocalExecutor):
 
         # checkout EXEC_HEAD and apply EXEC_MERGE on top of it without
         # committing
+        assert isinstance(self.scm, Git)
         head = EXEC_BRANCH if branch else EXEC_HEAD
         self.scm.checkout(head, detach=True)
         merge_rev = self.scm.get_ref(EXEC_MERGE)
 
-        try:
-            self.scm.merge(merge_rev, squash=True, commit=False)
-        except _SCMError as exc:
-            raise GitMergeError(str(exc), scm=self.scm)  # noqa: B904
+        self.scm.stash.apply(merge_rev)
 
     def _config(self, cache_dir):
         local_config = os.path.join(
@@ -150,9 +145,11 @@ class TempDirExecutor(BaseLocalExecutor):
         with open(local_config, "w", encoding="utf-8") as fobj:
             fobj.write(f"[cache]\n    dir = {cache_dir}")
 
-    def init_cache(self, repo: "Repo", rev: str, run_cache: bool = True):
+    def init_cache(
+        self, repo: "Repo", rev: str, run_cache: bool = True  # noqa: ARG002
+    ):
         """Initialize DVC cache."""
-        self._config(repo.odb.repo.path)
+        self._config(repo.cache.repo.path)
 
     def cleanup(self, infofile: str):
         super().cleanup(infofile)
@@ -214,6 +211,8 @@ class WorkspaceExecutor(BaseLocalExecutor):
         if infofile:
             self.info.dump_json(infofile)
 
+        assert isinstance(self.scm, Git)
+
         with get_exp_rwlock(repo, writes=[EXEC_NAMESPACE]):
             scm.set_ref(EXEC_HEAD, entry.head_rev)
             scm.set_ref(EXEC_MERGE, stash_rev)
@@ -226,10 +225,7 @@ class WorkspaceExecutor(BaseLocalExecutor):
                 )
             )
             merge_rev = self.scm.get_ref(EXEC_MERGE)
-            try:
-                self.scm.merge(merge_rev, squash=True, commit=False)
-            except _SCMError as exc:
-                raise GitMergeError(str(exc), scm=self.scm)  # noqa: B904
+            self.scm.stash.apply(merge_rev)
             if branch:
                 self.scm.set_ref(EXEC_BRANCH, branch, symbolic=True)
             elif scm.get_ref(EXEC_BRANCH):

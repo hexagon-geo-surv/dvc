@@ -3,8 +3,6 @@ from textwrap import dedent
 
 import pytest
 
-from dvc.repo.experiments.queue.celery import LocalCeleryQueue
-
 DEFAULT_ITERATIONS = 2
 CHECKPOINT_SCRIPT_FORMAT = dedent(
     """\
@@ -81,10 +79,7 @@ def checkpoint_stage(tmp_dir, scm, dvc, mocker):
     tmp_dir.gen("checkpoint.py", CHECKPOINT_SCRIPT)
     tmp_dir.gen("params.yaml", "foo: 1")
     stage = dvc.run(
-        cmd=(
-            f"python checkpoint.py foo {DEFAULT_ITERATIONS} "
-            "params.yaml metrics.yaml"
-        ),
+        cmd=f"python checkpoint.py foo {DEFAULT_ITERATIONS} params.yaml metrics.yaml",
         metrics_no_cache=["metrics.yaml"],
         params=["foo"],
         checkpoints=["foo"],
@@ -105,10 +100,7 @@ def failed_checkpoint_stage(tmp_dir, scm, dvc, mocker):
     tmp_dir.gen("checkpoint.py", FAILED_CHECKPOINT_SCRIPT)
     tmp_dir.gen("params.yaml", "foo: 1")
     stage = dvc.run(
-        cmd=(
-            f"python checkpoint.py foo {DEFAULT_ITERATIONS+2} "
-            "params.yaml metrics.yaml"
-        ),
+        cmd=f"python checkpoint.py foo {DEFAULT_ITERATIONS+2} params.yaml metrics.yaml",
         metrics_no_cache=["metrics.yaml"],
         params=["foo"],
         checkpoints=["foo"],
@@ -156,7 +148,7 @@ def _thread_worker(app, **kwargs):
 
 
 @pytest.fixture
-def test_queue(tmp_dir, dvc, scm, mocker) -> LocalCeleryQueue:
+def test_queue(tmp_dir, dvc, scm, mocker):
     """Patches experiments celery queue for pytest testing.
 
     Test queue worker runs for the duration of the test in separate thread(s).

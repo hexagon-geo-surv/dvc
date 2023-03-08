@@ -2,6 +2,7 @@ from collections import OrderedDict
 from operator import attrgetter
 from typing import (
     TYPE_CHECKING,
+    Any,
     Dict,
     Iterable,
     List,
@@ -147,31 +148,31 @@ def to_pipeline_file(stage: "PipelineStage"):
         (stage.PARAM_ALWAYS_CHANGED, stage.always_changed),
         (stage.PARAM_META, stage.meta),
     ]
-    return {
-        stage.name: OrderedDict([(key, value) for key, value in res if value])
-    }
+    return {stage.name: OrderedDict([(key, value) for key, value in res if value])}
 
 
 def to_single_stage_lockfile(stage: "Stage", **kwargs) -> dict:
+    from dvc.output import _serialize_tree_obj_to_files, split_file_meta_from_cloud
+    from dvc_data.hashfile.tree import Tree
+
     assert stage.cmd
 
-    def _dumpd(item):
-        meta_d = item.meta.to_dict()
-        meta_d.pop("isdir", None)
-        ret = [
-            (item.PARAM_PATH, item.def_path),
-            *item.hash_info.to_dict().items(),
-            *meta_d.items(),
-        ]
-
+    def _dumpd(item: "Output"):
+        ret: Dict[str, Any] = {item.PARAM_PATH: item.def_path}
         if item.hash_info.isdir and kwargs.get("with_files"):
-            if item.obj:
-                obj = item.obj
-            else:
-                obj = item.get_obj()
-            ret.append((item.PARAM_FILES, obj.as_list(with_meta=True)))
-
-        return OrderedDict(ret)
+            obj = item.obj or item.get_obj()
+            if obj:
+                assert isinstance(obj, Tree)
+                ret[item.PARAM_FILES] = [
+                    split_file_meta_from_cloud(f)
+                    for f in _serialize_tree_obj_to_files(obj)
+                ]
+        else:
+            meta_d = item.meta.to_dict()
+            meta_d.pop("isdir", None)
+            ret.update(item.hash_info.to_dict())
+            ret.update(split_file_meta_from_cloud(meta_d))
+        return ret
 
     res = OrderedDict([("cmd", stage.cmd)])
     params, deps = split_params_deps(stage)

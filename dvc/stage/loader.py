@@ -2,7 +2,7 @@ import logging
 from collections.abc import Mapping
 from copy import deepcopy
 from itertools import chain
-from typing import TYPE_CHECKING, Any, Dict, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterable, Optional, Tuple
 
 from funcy import get_in, lcat, once, project
 
@@ -20,6 +20,7 @@ from .utils import fill_stage_dependencies, resolve_paths
 
 if TYPE_CHECKING:
     from dvc.dvcfile import ProjectFile, SingleStageFile
+    from dvc.output import Output
 
 logger = logging.getLogger(__name__)
 
@@ -56,8 +57,10 @@ class StageLoader(Mapping):
         if not lock_data:
             return
 
+        from dvc.output import merge_file_meta_from_cloud
+
         assert isinstance(lock_data, dict)
-        items = chain(
+        items: Iterable[Tuple[str, "Output"]] = chain(
             ((StageParams.PARAM_DEPS, dep) for dep in stage.deps),
             ((StageParams.PARAM_OUTS, out) for out in stage.outs),
         )
@@ -74,19 +77,21 @@ class StageLoader(Mapping):
             info = get_in(checksums, [key, path], {})
             info = info.copy()
             info.pop("path", None)
-            item.meta = Meta.from_dict(info)
+
+            item.meta = Meta.from_dict(merge_file_meta_from_cloud(info))
             hash_value = getattr(item.meta, item.hash_name, None)
             item.hash_info = HashInfo(item.hash_name, hash_value)
-            if item.hash_info and item.hash_info.isdir:
-                item.meta.isdir = True
-            item.files = get_in(checksums, [key, path, item.PARAM_FILES])
+            files = get_in(checksums, [key, path, item.PARAM_FILES], None)
+            if files:
+                item.files = [merge_file_meta_from_cloud(f) for f in files]
+            # pylint: disable-next=protected-access
+            item._compute_meta_hash_info_from_files()
 
     @classmethod
-    def load_stage(
-        cls, dvcfile: "ProjectFile", name, stage_data, lock_data=None
-    ):
+    def load_stage(cls, dvcfile: "ProjectFile", name, stage_data, lock_data=None):
         assert all([name, dvcfile, dvcfile.repo, dvcfile.path])
-        assert stage_data and isinstance(stage_data, dict)
+        assert stage_data
+        assert isinstance(stage_data, dict)
 
         path, wdir = resolve_paths(
             dvcfile.repo.fs, dvcfile.path, stage_data.get(Stage.PARAM_WDIR)
@@ -154,9 +159,7 @@ class StageLoader(Mapping):
         if group and keys and name not in self.stages_data:
             stage.raw_data.generated_from = group
 
-        stage.raw_data.parametrized = (
-            self.stages_data.get(name, {}) != resolved_stage
-        )
+        stage.raw_data.parametrized = self.stages_data.get(name, {}) != resolved_stage
         return stage
 
     def __iter__(self):
@@ -169,9 +172,7 @@ class StageLoader(Mapping):
         return self.resolver.has_key(name)  # noqa: W601
 
     def is_foreach_generated(self, name: str):
-        return (
-            name in self.stages_data and FOREACH_KWD in self.stages_data[name]
-        )
+        return name in self.stages_data and FOREACH_KWD in self.stages_data[name]
 
 
 class SingleStageLoader(Mapping):
@@ -194,9 +195,7 @@ class SingleStageLoader(Mapping):
             )
         # during `load`, we remove attributes from stage data, so as to
         # not duplicate, therefore, for MappingView, we need to deepcopy.
-        return self.load_stage(
-            self.dvcfile, deepcopy(self.stage_data), self.stage_text
-        )
+        return self.load_stage(self.dvcfile, deepcopy(self.stage_data), self.stage_text)
 
     @classmethod
     def load_stage(
@@ -210,9 +209,7 @@ class SingleStageLoader(Mapping):
         )
         stage = loads_from(Stage, dvcfile.repo, path, wdir, d)
         stage._stage_text = stage_text  # pylint: disable=protected-access
-        stage.deps = dependency.loadd_from(
-            stage, d.get(Stage.PARAM_DEPS) or []
-        )
+        stage.deps = dependency.loadd_from(stage, d.get(Stage.PARAM_DEPS) or [])
         stage.outs = output.loadd_from(stage, d.get(Stage.PARAM_OUTS) or [])
         return stage
 

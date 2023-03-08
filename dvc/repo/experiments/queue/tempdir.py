@@ -7,12 +7,7 @@ from funcy import first
 
 from dvc.exceptions import DvcException
 from dvc.repo.experiments.exceptions import ExpQueueEmptyError
-from dvc.repo.experiments.executor.base import (
-    BaseExecutor,
-    ExecutorInfo,
-    ExecutorResult,
-    TaskStatus,
-)
+from dvc.repo.experiments.executor.base import ExecutorInfo, TaskStatus
 from dvc.repo.experiments.executor.local import TempDirExecutor
 from dvc.repo.experiments.utils import EXEC_PID_DIR, EXEC_TMP_DIR
 from dvc.utils.objects import cached_property
@@ -23,6 +18,7 @@ from .workspace import WorkspaceQueue
 
 if TYPE_CHECKING:
     from dvc.repo.experiments import Experiments
+    from dvc.repo.experiments.executor.base import BaseExecutor, ExecutorResult
     from dvc_task.proc.manager import ProcessManager
 
 logger = logging.getLogger(__name__)
@@ -96,7 +92,7 @@ class TempDirQueue(WorkspaceQueue):
                 )
 
     def _reproduce_entry(
-        self, entry: QueueEntry, executor: BaseExecutor
+        self, entry: QueueEntry, executor: "BaseExecutor"
     ) -> Dict[str, Dict[str, str]]:
         from dvc.stage.monitor import CheckpointKilledError
 
@@ -113,29 +109,21 @@ class TempDirQueue(WorkspaceQueue):
                 log_errors=True,
             )
             if not exec_result.exp_hash:
-                raise DvcException(
-                    f"Failed to reproduce experiment '{rev[:7]}'"
-                )
+                raise DvcException(f"Failed to reproduce experiment '{rev[:7]}'")
             if exec_result.ref_info:
                 results[rev].update(
-                    self.collect_executor(
-                        self.repo.experiments, executor, exec_result
-                    )
+                    self.collect_executor(self.repo.experiments, executor, exec_result)
                 )
         except CheckpointKilledError:
             results[rev].update(
-                self.collect_executor(
-                    self.repo.experiments, executor, exec_result
-                )
+                self.collect_executor(self.repo.experiments, executor, exec_result)
             )
 
             return results
         except DvcException:
             raise
         except Exception as exc:  # noqa: BLE001
-            raise DvcException(
-                f"Failed to reproduce experiment '{rev[:7]}'"
-            ) from exc
+            raise DvcException(f"Failed to reproduce experiment '{rev[:7]}'") from exc
         finally:
             executor.cleanup(infofile)
         return results
@@ -143,8 +131,8 @@ class TempDirQueue(WorkspaceQueue):
     @staticmethod
     def collect_executor(
         exp: "Experiments",
-        executor: BaseExecutor,
-        exec_result: ExecutorResult,
+        executor: "BaseExecutor",
+        exec_result: "ExecutorResult",
     ) -> Dict[str, str]:
         return BaseStashQueue.collect_executor(exp, executor, exec_result)
 
@@ -152,8 +140,6 @@ class TempDirQueue(WorkspaceQueue):
         result: Dict[str, Dict] = {}
         for entry in self.iter_active():
             result.update(
-                fetch_running_exp_from_temp_dir(
-                    self, entry.stash_rev, fetch_refs
-                )
+                fetch_running_exp_from_temp_dir(self, entry.stash_rev, fetch_refs)
             )
         return result

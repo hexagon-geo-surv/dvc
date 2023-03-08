@@ -18,9 +18,7 @@ logger = logging.getLogger(__name__)
 def _show_json(renderers, split=False):
     from dvc.render.convert import to_json
 
-    result = {
-        renderer.name: to_json(renderer, split) for renderer in renderers
-    }
+    result = {renderer.name: to_json(renderer, split) for renderer in renderers}
     ui.write_json(result)
 
 
@@ -78,10 +76,6 @@ class CmdPlots(CmdBase):
         props = {p: getattr(self.args, p) for p in PLOT_PROPS}
         return {k: v for k, v in props.items() if v is not None}
 
-    def _config_files(self):
-        if self.args.from_config:
-            return {self.args.from_config}
-
     def _html_template_path(self):
         html_template_path = self.args.html_template
         if not html_template_path:
@@ -90,12 +84,10 @@ class CmdPlots(CmdBase):
             )
             if html_template_path and not os.path.isabs(html_template_path):
                 assert self.repo.dvc_dir
-                html_template_path = os.path.join(
-                    self.repo.dvc_dir, html_template_path
-                )
-        return html_template_path
+                html_template_path = os.path.join(self.repo.dvc_dir, html_template_path)
+        return html_template_path  # noqa: RET504
 
-    def run(self) -> int:  # noqa: C901
+    def run(self) -> int:  # noqa: C901, PLR0911, PLR0912
         from pathlib import Path
 
         from dvc.render.match import match_defs_renderers
@@ -106,14 +98,11 @@ class CmdPlots(CmdBase):
                 logger.error("please specify a target for `--show-vega`")
                 return 1
             if len(self.args.targets) > 1:
-                logger.error(
-                    "you can only specify one target for `--show-vega`"
-                )
+                logger.error("you can only specify one target for `--show-vega`")
                 return 1
             if self.args.json:
                 logger.error(
-                    "'--show-vega' and '--json' are mutually exclusive "
-                    "options."
+                    "'--show-vega' and '--json' are mutually exclusive options."
                 )
                 return 1
 
@@ -121,22 +110,18 @@ class CmdPlots(CmdBase):
             plots_data = self._func(
                 targets=self.args.targets,
                 props=self._props(),
-                config_files=self._config_files(),
             )
 
             if not plots_data:
                 ui.error_write(
-                    "No plots were loaded, "
-                    "visualization file will not be created."
+                    "No plots were loaded, visualization file will not be created."
                 )
 
             out: str = self.args.out or self.repo.config.get("plots", {}).get(
                 "out_dir", "dvc_plots"
             )
 
-            renderers_out = (
-                out if self.args.json else os.path.join(out, "static")
-            )
+            renderers_out = out if self.args.json else os.path.join(out, "static")
 
             renderers = match_defs_renderers(
                 data=plots_data,
@@ -160,7 +145,7 @@ class CmdPlots(CmdBase):
                 render_html(
                     renderers=renderers,
                     output_file=output_file,
-                    template_path=self._html_template_path(),
+                    html_template=self._html_template_path(),
                 )
 
                 ui.write(output_file.as_uri())
@@ -249,8 +234,7 @@ def add_parser(subparsers, parent_parser):
     fix_subparsers(plots_subparsers)
 
     SHOW_HELP = (
-        "Generate plots from target files or from `plots`"
-        " definitions in `dvc.yaml`."
+        "Generate plots from target files or from `plots` definitions in `dvc.yaml`."
     )
     plots_show_parser = plots_subparsers.add_parser(
         "show",
@@ -273,8 +257,7 @@ def add_parser(subparsers, parent_parser):
     plots_show_parser.set_defaults(func=CmdPlotsShow)
 
     PLOTS_DIFF_HELP = (
-        "Show multiple versions of a plot by overlaying them "
-        "in a single image."
+        "Show multiple versions of a plot by overlaying them in a single image."
     )
     plots_diff_parser = plots_subparsers.add_parser(
         "diff",
@@ -332,9 +315,7 @@ def add_parser(subparsers, parent_parser):
     )
     plots_modify_parser.set_defaults(func=CmdPlotsModify)
 
-    TEMPLATES_HELP = (
-        "List built-in plots templates or show JSON specification for one."
-    )
+    TEMPLATES_HELP = "List built-in plots templates or show JSON specification for one."
     plots_templates_parser = plots_subparsers.add_parser(
         "templates",
         parents=[parent_parser],
@@ -360,11 +341,8 @@ def _add_props_arguments(parser):
         "--template",
         nargs="?",
         default=None,
-        help=(
-            "Special JSON or HTML schema file to inject with the data. "
-            "See {}".format(
-                format_link("https://man.dvc.org/plots#plot-templates")
-            )
+        help="Special JSON or HTML schema file to inject with the data. See {}".format(
+            format_link("https://man.dvc.org/plots#plot-templates")
         ),
         metavar="<path>",
     ).complete = completion.FILE
@@ -381,9 +359,7 @@ def _add_props_arguments(parser):
         default=None,  # Use default None to distinguish when it's not used
         help="Provided CSV or TSV datafile does not have a header.",
     )
-    parser.add_argument(
-        "--title", default=None, metavar="<text>", help="Plot title."
-    )
+    parser.add_argument("--title", default=None, metavar="<text>", help="Plot title.")
     parser.add_argument(
         "--x-label", default=None, help="X axis label", metavar="<text>"
     )
@@ -430,10 +406,4 @@ def _add_ui_arguments(parser):
         default=None,
         help="Custom HTML template for VEGA visualization.",
         metavar="<path>",
-    )
-    parser.add_argument(
-        "--from-config",
-        default=None,
-        metavar="<path>",
-        help=argparse.SUPPRESS,
     )
