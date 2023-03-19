@@ -17,7 +17,6 @@ def _collect_outs(
     repo: "Repo", output_filter: Optional[FilterFn] = None, deps: bool = False
 ) -> Outputs:
     index = repo.index
-    index.check_graph()  # ensure graph is correct
     return list(filter(output_filter, index.deps if deps else index.outs))
 
 
