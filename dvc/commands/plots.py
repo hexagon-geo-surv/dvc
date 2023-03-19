@@ -1,5 +1,4 @@
 import argparse
-import json
 import logging
 import os
 
@@ -19,7 +18,7 @@ def _show_json(renderers, split=False):
     from dvc.render.convert import to_json
 
     result = {renderer.name: to_json(renderer, split) for renderer in renderers}
-    ui.write_json(result)
+    ui.write_json(result, highlight=False)
 
 
 def _adjust_vega_renderers(renderers):
@@ -112,7 +111,7 @@ class CmdPlots(CmdBase):
                 props=self._props(),
             )
 
-            if not plots_data:
+            if not plots_data and not self.args.json:
                 ui.error_write(
                     "No plots were loaded, visualization file will not be created."
                 )
@@ -136,7 +135,7 @@ class CmdPlots(CmdBase):
             if self.args.show_vega:
                 renderer = first(filter(lambda r: r.TYPE == "vega", renderers))
                 if renderer:
-                    ui.write_json(json.loads(renderer.get_filled_template()))
+                    ui.write_json(renderer.get_filled_template(as_string=False))
                 return 0
 
             output_file: Path = (Path.cwd() / out).resolve() / "index.html"
