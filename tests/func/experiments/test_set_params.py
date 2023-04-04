@@ -120,6 +120,7 @@ def test_hydra_sweep(
             params=e,
             reset=True,
             targets=None,
+            copy_paths=None
         )
 
 

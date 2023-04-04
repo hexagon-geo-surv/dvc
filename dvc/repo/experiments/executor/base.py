@@ -1,6 +1,7 @@
 import logging
 import os
 import pickle  # nosec B403
+import shutil
 from abc import ABC, abstractmethod
 from contextlib import contextmanager
 from dataclasses import asdict, dataclass
@@ -451,6 +452,7 @@ class BaseExecutor(ABC):
         infofile: Optional[str] = None,
         log_errors: bool = True,
         log_level: Optional[int] = None,
+        copy_paths: Optional[List[str]] = None,
         **kwargs,
     ) -> "ExecutorResult":
         """Run dvc repro and return the result.
@@ -487,6 +489,7 @@ class BaseExecutor(ABC):
             info,
             infofile,
             log_errors=log_errors,
+            copy_paths=copy_paths,
             **kwargs,
         ) as dvc:
             if auto_push:
@@ -609,6 +612,7 @@ class BaseExecutor(ABC):
         info: "ExecutorInfo",
         infofile: Optional[str] = None,
         log_errors: bool = True,
+        copy_paths: Optional[List[str]] = None,
         **kwargs,
     ):
         from dvc_studio_client.post_live_metrics import post_live_metrics
@@ -623,6 +627,18 @@ class BaseExecutor(ABC):
             if cls.QUIET:
                 dvc.scm_context.quiet = cls.QUIET
             old_cwd = os.getcwd()
+
+            if copy_paths:
+                for path in copy_paths:
+                    if os.path.isfile(path):
+                        shutil.copy(
+                            os.path.realpath(path), os.path.join(dvc.root_dir, path)
+                        )
+                    elif os.path.isdir(path):
+                        shutil.copytree(
+                            os.path.realpath(path), os.path.join(dvc.root_dir, path)
+                        )
+
             if info.wdir:
                 os.chdir(os.path.join(dvc.scm.root_dir, info.wdir))
             else:

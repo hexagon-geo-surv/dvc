@@ -704,3 +704,48 @@ def test_untracked_top_level_files_are_included_in_exp(tmp_dir, scm, dvc, tmp):
     fs = scm.get_fs(exp)
     for file in ["metrics.json", "params.yaml", "plots.csv"]:
         assert fs.exists(file)
+
+
+@pytest.mark.parametrize("tmp", [True, False])
+def test_copy_paths(tmp_dir, scm, dvc, tmp):
+    stage = dvc.stage.add(
+        cmd="cat file && ls dir",
+        name="foo",
+    )
+    scm.add_commit(["dvc.yaml"], message="add dvc.yaml")
+
+    (tmp_dir / "dir").mkdir()
+    (tmp_dir / "dir" / "file").write_text("dir/file")
+    scm.ignore(tmp_dir / "dir")
+    (tmp_dir / "file").write_text("file")
+    scm.ignore(tmp_dir / "file")
+
+    results = dvc.experiments.run(
+        stage.addressing, tmp_dir=tmp, copy_paths=["dir", "file"]
+    )
+    exp = first(results)
+    fs = scm.get_fs(exp)
+    assert not fs.exists("dir")
+    assert not fs.exists("file")
+
+
+def test_copy_paths_queue(tmp_dir, scm, dvc):
+    stage = dvc.stage.add(
+        cmd="cat file && ls dir",
+        name="foo",
+    )
+    scm.add_commit(["dvc.yaml"], message="add dvc.yaml")
+
+    (tmp_dir / "dir").mkdir()
+    (tmp_dir / "dir" / "file").write_text("dir/file")
+    scm.ignore(tmp_dir / "dir")
+    (tmp_dir / "file").write_text("file")
+    scm.ignore(tmp_dir / "file")
+
+    dvc.experiments.run(stage.addressing, queue=True)
+    results = dvc.experiments.run(run_all=True)
+
+    exp = first(results)
+    fs = scm.get_fs(exp)
+    assert not fs.exists("dir")
+    assert not fs.exists("file")
