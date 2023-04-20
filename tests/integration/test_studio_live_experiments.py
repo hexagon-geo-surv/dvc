@@ -40,3 +40,18 @@ def test_post_to_studio(tmp_dir, dvc, scm, exp_stage, mocker, monkeypatch, tmp):
         "experiment_rev": exp_rev,
         "metrics": {"metrics.yaml": {"data": {"foo": 1}}},
     }
+
+
+@pytest.mark.skip
+def test_post_to_studio_queue(tmp_dir, dvc, scm, exp_stage, mocker, monkeypatch):
+    valid_response = mocker.MagicMock()
+    valid_response.status_code = 200
+    mocked_post = mocker.patch("requests.post", return_value=valid_response)
+
+    monkeypatch.setenv(env.STUDIO_ENDPOINT, "https://0.0.0.0")
+    monkeypatch.setenv(env.STUDIO_REPO_URL, "STUDIO_REPO_URL")
+    monkeypatch.setenv(env.STUDIO_TOKEN, "STUDIO_TOKEN")
+
+    dvc.experiments.run(exp_stage.addressing, params=["foo=1"], queue=True)
+    dvc.experiments.run(run_all=True)
+    assert mocked_post.call_count == 2
