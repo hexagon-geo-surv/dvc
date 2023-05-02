@@ -8,8 +8,10 @@ import colorama
 
 from dvc.exceptions import (
     CacheLinkError,
+    DvcException,
     InvalidArgumentError,
     OutputDuplicationError,
+    OutputNotFoundError,
     OverlappingOutputPathsError,
     RecursiveAddingWhileUsingFilename,
 )
@@ -197,13 +199,13 @@ def add(
 
     with warn_link_failures() as link_failures:
         for stage, source in zip(progress_iter(stages), sources):
+            out = stage.outs[0]
             if to_remote or to_cache:
                 stage.transfer(source, to_remote=to_remote, odb=odb, **kwargs)
             else:
                 try:
-                    stage.save()
-                    if not no_commit:
-                        stage.commit()
+                    path = out.fs.path.abspath(source)
+                    stage.add_outs(path, no_commit=no_commit)
                 except CacheLinkError:
                     link_failures.append(str(stage.relpath))
             stage.dump()
@@ -271,7 +273,15 @@ def create_stages(
             repo, target, always_local=transfer and not kwargs.get("out")
         )
 
-        stage = repo.stage.create(
+        stage = None
+        if not kwargs.get("recursive"):
+            try:
+                (out,) = repo.find_outs_by_path(target, strict=False)
+                stage = out.stage
+            except OutputNotFoundError:
+                pass
+
+        stage = stage or repo.stage.create(
             single_stage=True,
             validate=False,
             fname=fname or path,
@@ -280,6 +290,8 @@ def create_stages(
             external=external,
             force=force,
         )
+        if not stage.is_data_source:
+            raise DvcException(f"cannot update {out!r}: not a data source")
 
         out_obj = stage.outs[0]
         out_obj.annot.update(**kwargs)

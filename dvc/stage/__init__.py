@@ -560,6 +560,21 @@ class Stage(params.StageParams):
         if link_failures:
             raise CacheLinkError(link_failures)
 
+    @rwlocked(write=["outs"])
+    def add_outs(self, filter_info=None, allow_missing: bool = False, **kwargs):
+        link_failures = []
+        for out in self.filter_outs(filter_info):
+            try:
+                out.add(filter_info, **kwargs)
+            except FileNotFoundError:
+                if not (allow_missing or out.checkpoint):
+                    raise
+            except CacheLinkError:
+                link_failures.append(filter_info or out.fs_path)
+
+        if link_failures:
+            raise CacheLinkError(link_failures)
+
     @rwlocked(read=["deps", "outs"])
     def run(
         self,

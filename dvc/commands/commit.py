@@ -21,8 +21,10 @@ class CmdCommit(CmdBase):
                     target,
                     with_deps=self.args.with_deps,
                     recursive=self.args.recursive,
-                    force=self.args.force,
                 )
+            except FileNotFoundError:
+                logger.exception("")
+                return 1
             except DvcException:
                 logger.exception("failed to commit%s", (" " + target) if target else "")
                 return 1
@@ -41,13 +43,6 @@ def add_parser(subparsers, parent_parser):
         description=append_doc_link(COMMIT_HELP, "commit"),
         help=COMMIT_HELP,
         formatter_class=argparse.RawDescriptionHelpFormatter,
-    )
-    commit_parser.add_argument(
-        "-f",
-        "--force",
-        action="store_true",
-        default=False,
-        help="Commit even if hash value for dependencies/outputs changed.",
     )
     commit_parser.add_argument(
         "-d",

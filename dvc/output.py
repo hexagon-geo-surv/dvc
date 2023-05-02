@@ -1,3 +1,4 @@
+import errno
 import logging
 import os
 import posixpath
@@ -29,7 +30,7 @@ from dvc_data.hashfile.hash_info import HashInfo
 from dvc_data.hashfile.istextfile import istextfile
 from dvc_data.hashfile.meta import Meta
 from dvc_data.hashfile.transfer import transfer as otransfer
-from dvc_data.hashfile.tree import Tree
+from dvc_data.hashfile.tree import Tree, du
 from dvc_objects.errors import ObjectFormatError
 
 from .annotations import ANNOTATION_FIELDS, ANNOTATION_SCHEMA, Annotation
@@ -1008,7 +1009,7 @@ class Output:
         if self.exists:
             self.cache.unprotect(self.fs_path)
 
-    def get_dir_cache(self, **kwargs):
+    def get_dir_cache(self, **kwargs) -> Optional["Tree"]:
         if not self.is_dir_checksum:
             raise DvcException("cannot get dir cache for file checksum")
 
@@ -1022,14 +1023,17 @@ class Output:
                 self.repo.cloud.pull([obj.hash_info], **kwargs)
 
         if self.obj:
+            assert isinstance(self.obj, Tree)
             return self.obj
 
         try:
-            self.obj = oload(self.cache, self.hash_info)
+            obj = oload(self.cache, self.hash_info)
+            assert isinstance(obj, Tree)
         except (FileNotFoundError, ObjectFormatError):
-            self.obj = None
+            obj = None
 
-        return self.obj
+        self.obj = obj
+        return obj
 
     def _collect_used_dir_cache(
         self, remote=None, force=False, jobs=None, filter_info=None
@@ -1165,7 +1169,7 @@ class Output:
 
     def merge(self, ancestor, other, allowed=None):
         from dvc_data.hashfile.tree import MergeError as TreeMergeError
-        from dvc_data.hashfile.tree import du, merge
+        from dvc_data.hashfile.tree import merge
 
         assert other
 
@@ -1197,6 +1201,109 @@ class Output:
             size=du(self.cache, merged),
             nfiles=len(merged),
         )
+
+    def add(  # noqa: C901, PLR0912, PLR0915
+        self,
+        path: Optional[str] = None,
+        relink: bool = True,
+        no_commit: bool = False,
+    ) -> Optional["HashFile"]:
+        from pygtrie import Trie
+
+        from dvc_data.hashfile.db import add_update_tree
+
+        path = path or self.fs_path
+
+        if self.hash_info and not self.is_dir_checksum and self.fs_path != path:
+            raise DvcException(
+                f"Cannot modify '{self}' which is being tracked as a file"
+            )
+
+        cache = self.cache if self.use_cache else self.repo.cache.local
+        assert self.hash_name
+        staging, meta, obj = None, None, None
+
+        append_only = True
+        try:
+            staging, meta, obj = build(
+                cache,
+                path,
+                self.fs,
+                self.hash_name,
+                ignore=self.dvcignore,
+                dry_run=not self.use_cache,
+            )
+        except FileNotFoundError:
+            if self.fs_path == path or not self.is_dir_checksum:
+                raise
+
+        if self.fs_path == path:
+            assert meta
+            assert obj
+            new = obj
+        else:
+            rel_key = tuple(
+                self.fs.path.parts(self.fs.path.relpath(path, self.fs_path))
+            )
+            tree = self.get_dir_cache() or Tree()
+            trie = tree.as_trie()
+            assert isinstance(trie, Trie)
+
+            try:
+                del trie[rel_key:]  # type: ignore[misc]
+                append_only = False
+            except KeyError:
+                if not self.fs.exists(path):
+                    raise FileNotFoundError(  # noqa: B904
+                        errno.ENOENT,
+                        os.strerror(errno.ENOENT),
+                        self.fs.path.relpath(path),
+                    )
+
+            items = {}
+            if isinstance(obj, Tree):
+                items = {(*rel_key, *key): (m, o) for key, m, o in obj}
+            elif obj:
+                items = {rel_key: (meta, obj.hash_info)}
+            trie.update(items)
+
+            new = Tree.from_trie(trie)
+            new.digest()
+            add_update_tree(cache, new)
+
+        self.obj = new
+        self.hash_info = self.obj.hash_info
+
+        if self.fs_path == path and meta:
+            self.meta = meta
+        else:
+            size = None
+            if append_only and meta and self.meta and (size := self.meta.size):
+                # if files were only appended, we can sum to the existing size
+                size += meta.size or 0
+            self.meta = Meta(nfiles=len(self.obj), size=size)
+
+        self.files = None
+
+        if no_commit or (not self.use_cache and not self.IS_DEPENDENCY):
+            return obj
+
+        if staging and obj and obj.hash_info:
+            otransfer(staging, cache, {obj.hash_info}, hardlink=relink)
+
+        if obj and relink and self.use_cache:
+            self._checkout(
+                path,
+                self.fs,
+                obj,
+                self.cache,
+                relink=True,
+                state=self.repo.state,
+                prompt=prompt.confirm,
+                force=True,
+            )
+            self.set_exec()
+        return obj
 
     @property
     def fspath(self):
