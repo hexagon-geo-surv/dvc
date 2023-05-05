@@ -78,12 +78,11 @@ def run_copy(tmp_dir, copy_script, dvc):
 
 @pytest.fixture
 def run_head(tmp_dir, head_script, dvc):
-    script = os.path.abspath(tmp_dir / "head.py")
 
     def run(*args, **run_kwargs):
         return dvc.run(
             **{
-                "cmd": "python {} {}".format(script, " ".join(args)),
+                "cmd": "python head.py {}".format(" ".join(args)),
                 "outs": [dep + "-1" for dep in args],
                 "deps": list(args),
                 **run_kwargs,
