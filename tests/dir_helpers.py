@@ -78,7 +78,6 @@ def run_copy(tmp_dir, copy_script, dvc):
 
 @pytest.fixture
 def run_head(tmp_dir, head_script, dvc):
-
     def run(*args, **run_kwargs):
         return dvc.run(
             **{
