@@ -183,7 +183,9 @@ def add(
 
     # collect targets and build stages as we go
     desc = "Collecting targets"
-    stages_it = create_stages(repo, add_targets, fname, transfer, **kwargs)
+    stages_it = create_stages(
+        repo, add_targets, fname, transfer, recursive=recursive, **kwargs
+    )
     stages = list(ui.progress(stages_it, desc=desc, unit="file"))
     msg = "Collecting stages from the workspace"
     with translate_graph_error(stages), ui.status(msg) as status:
@@ -204,7 +206,9 @@ def add(
                 stage.transfer(source, to_remote=to_remote, odb=odb, **kwargs)
             else:
                 try:
-                    path = out.fs.path.abspath(source)
+                    path = (
+                        out.fs.path.abspath(source) if out.def_path != source else None
+                    )
                     stage.add_outs(path, no_commit=no_commit)
                 except CacheLinkError:
                     link_failures.append(str(stage.relpath))
@@ -276,8 +280,8 @@ def create_stages(
         stage = None
         if not kwargs.get("recursive"):
             try:
-                (out,) = repo.find_outs_by_path(target, strict=False)
-                stage = out.stage
+                (out_obj,) = repo.find_outs_by_path(out, strict=False)
+                stage = out_obj.stage
             except OutputNotFoundError:
                 pass
 
