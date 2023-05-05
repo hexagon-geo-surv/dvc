@@ -1245,7 +1245,12 @@ class Output:
             rel_key = tuple(
                 self.fs.path.parts(self.fs.path.relpath(path, self.fs_path))
             )
-            tree = self.get_dir_cache() or Tree()
+
+            if not self.hash_info:
+                tree = Tree()
+            elif dir_obj := self.get_dir_cache():
+                tree = dir_obj
+
             trie = tree.as_trie()
             assert isinstance(trie, Trie)
 
