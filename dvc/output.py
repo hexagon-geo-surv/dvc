@@ -1250,6 +1250,8 @@ class Output:
                 tree = Tree()
             elif dir_obj := self.get_dir_cache():
                 tree = dir_obj
+            else:
+                raise DvcException(f"Missing cache for '{self}'")
 
             trie = tree.as_trie()
             assert isinstance(trie, Trie)
