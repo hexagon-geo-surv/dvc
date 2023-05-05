@@ -1241,7 +1241,6 @@ class Output:
             assert meta
             assert obj
             new = obj
-            self.ignore()
         else:
             rel_key = tuple(
                 self.fs.path.parts(self.fs.path.relpath(path, self.fs_path))
@@ -1293,6 +1292,7 @@ class Output:
 
         self.files = None
 
+        self.ignore()
         if no_commit or (not self.use_cache and not self.IS_DEPENDENCY):
             return obj
 
