@@ -1241,6 +1241,7 @@ class Output:
             assert meta
             assert obj
             new = obj
+            self.ignore()
         else:
             rel_key = tuple(
                 self.fs.path.parts(self.fs.path.relpath(path, self.fs_path))
@@ -1296,7 +1297,7 @@ class Output:
             return obj
 
         if staging and obj and obj.hash_info:
-            otransfer(staging, cache, {obj.hash_info}, hardlink=relink)
+            otransfer(staging, cache, {obj.hash_info}, hardlink=relink, shallow=False)
 
         if obj and relink and self.use_cache:
             self._checkout(
@@ -1307,7 +1308,6 @@ class Output:
                 relink=True,
                 state=self.repo.state,
                 prompt=prompt.confirm,
-                force=True,
             )
             self.set_exec()
         return obj
