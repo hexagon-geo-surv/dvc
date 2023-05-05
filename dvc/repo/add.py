@@ -280,8 +280,10 @@ def create_stages(
         stage = None
         if not kwargs.get("recursive"):
             try:
-                (out_obj,) = repo.find_outs_by_path(out, strict=False)
+                (out_obj,) = repo.find_outs_by_path(target, strict=False)
                 stage = out_obj.stage
+                if not stage.is_data_source:
+                    raise DvcException(f"cannot update {out!r}: not a data source")
             except OutputNotFoundError:
                 pass
 

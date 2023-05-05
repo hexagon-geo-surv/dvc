@@ -179,3 +179,6 @@ class ParamsDependency(Dependency):
 
         self.ignore()
         self.hash_info = self.get_hash()
+
+    def add(self, *args, **kwargs):
+        return self.save()

@@ -25,6 +25,8 @@ def commit(
         if not data_only or info.stage.is_data_source
     ]
     for stage, filter_info in stages_info:
+        # TODO: support committing deps
+        stage.add_deps(filter_info, allow_missing=allow_missing, relink=relink)
         stage.add_outs(filter_info, allow_missing=allow_missing, relink=relink)
         stage.dump(update_pipeline=False)
     return [s.stage for s in stages_info]

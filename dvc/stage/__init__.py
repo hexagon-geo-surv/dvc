@@ -43,6 +43,7 @@ from .utils import (
 )
 
 if TYPE_CHECKING:
+    from dvc.dependency.base import Dependency
     from dvc.dvcfile import ProjectFile, SingleStageFile
     from dvc.output import Output
     from dvc.repo import Repo
@@ -560,13 +561,32 @@ class Stage(params.StageParams):
         if link_failures:
             raise CacheLinkError(link_failures)
 
+    def add_deps(self, filter_info=None, allow_missing: bool = False, **kwargs):
+        from dvc.dependency.base import DependencyDoesNotExistError
+
+        link_failures = []
+        for dep in self.filter_deps(filter_info):
+            try:
+                dep.add(filter_info, **kwargs)
+            except (FileNotFoundError, DependencyDoesNotExistError):
+                if not allow_missing:
+                    raise
+            except CacheLinkError:
+                link_failures.append(filter_info or dep.fs_path)
+
+        if link_failures:
+            raise CacheLinkError(link_failures)
+
     @rwlocked(write=["outs"])
     def add_outs(self, filter_info=None, allow_missing: bool = False, **kwargs):
+        from dvc.output import OutputDoesNotExistError
+
         link_failures = []
+
         for out in self.filter_outs(filter_info):
             try:
                 out.add(filter_info, **kwargs)
-            except FileNotFoundError:
+            except (FileNotFoundError, OutputDoesNotExistError):
                 if not (allow_missing or out.checkpoint):
                     raise
             except CacheLinkError:
@@ -634,6 +654,12 @@ class Stage(params.StageParams):
             return o.fs.path.isin_or_eq(fs_path, o.fs_path)
 
         return filter(_func, self.outs) if fs_path else self.outs
+
+    def filter_deps(self, fs_path) -> Iterable["Dependency"]:
+        def _func(o):
+            return o.fs.path.isin_or_eq(fs_path, o.fs_path)
+
+        return filter(_func, self.deps) if fs_path else self.deps
 
     @rwlocked(write=["outs"])
     def checkout(

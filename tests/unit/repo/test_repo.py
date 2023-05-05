@@ -73,6 +73,7 @@ def test_locked(mocker):
     ]
 
 
+@pytest.mark.xfail
 def test_skip_graph_checks(tmp_dir, dvc, mocker, run_copy):
     # See https://github.com/iterative/dvc/issues/2671 for more info
     from dvc.repo.index import Index

@@ -1219,6 +1219,9 @@ class Output:
                 f"Cannot modify '{self}' which is being tracked as a file"
             )
 
+        if self.metric:
+            self.verify_metric()
+
         cache = self.cache if self.use_cache else self.repo.cache.local
         assert self.hash_name
         staging, meta, obj = None, None, None
@@ -1233,11 +1236,16 @@ class Output:
                 ignore=self.dvcignore,
                 dry_run=not self.use_cache,
             )
-        except FileNotFoundError:
-            if self.fs_path == path or not self.is_dir_checksum:
+        except FileNotFoundError as exc:
+            if self.fs_path == path:
+                raise self.DoesNotExistError(self) from exc
+            if not self.is_dir_checksum:
                 raise
 
         if self.fs_path == path:
+            if not self.isfile() and not self.isdir():
+                raise self.IsNotFileOrDirError(self)
+
             assert meta
             assert obj
             new = obj
@@ -1248,10 +1256,8 @@ class Output:
 
             if not self.hash_info:
                 tree = Tree()
-            elif dir_obj := self.get_dir_cache():
-                tree = dir_obj
             else:
-                raise DvcException(f"Missing cache for '{self}'")
+                tree = self.get_dir_cache() or Tree()
 
             trie = tree.as_trie()
             assert isinstance(trie, Trie)
