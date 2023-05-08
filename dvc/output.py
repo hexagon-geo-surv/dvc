@@ -1227,12 +1227,11 @@ class Output:
 
         new = tree.from_trie(trie)
         new.digest()
-        return Meta(nfiles=len(new)), new
+        return Meta(nfiles=len(new), isdir=True), new
 
     def apply(
         self,
         path: str,
-        cache: "HashFileDB",
         obj: Union["Tree", "HashFile"],
         meta: "Meta",
     ) -> Tuple["Meta", "Tree"]:
@@ -1274,11 +1273,10 @@ class Output:
             # if files were only appended, we can sum to the existing size
             size += meta.size
 
-        meta = Meta(nfiles=len(new), size=size)
-        add_update_tree(cache, new)
+        meta = Meta(nfiles=len(new), size=size, isdir=True)
         return meta, new
 
-    def add(
+    def add(  # noqa: C901
         self, path: Optional[str] = None, no_commit: bool = False, relink: bool = True
     ) -> Optional["HashFile"]:
         path = path or self.fs_path
@@ -1313,8 +1311,11 @@ class Output:
         else:
             assert obj
             assert staging
-            subpath = self.fs_path != path
-            meta, new = self.apply(path, staging, obj, meta) if subpath else (meta, obj)
+            if self.fs_path != path:
+                meta, new = self.apply(path, obj, meta)
+                add_update_tree(staging, new)
+            else:
+                new = obj
 
         self.obj = new
         self.hash_info = self.obj.hash_info

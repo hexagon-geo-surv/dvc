@@ -128,7 +128,6 @@ def test_commit_granular_output_dir(tmp_dir, dvc):
     assert dvc.status() == {}
 
 
-@pytest.mark.xfail
 def test_commit_granular_dir(tmp_dir, dvc):
     tmp_dir.gen(
         {
@@ -147,25 +146,30 @@ def test_commit_granular_dir(tmp_dir, dvc):
 
     dvc.commit(os.path.join("data", "foo"))
     assert set(cache.glob("*/*")) == {
-        cache / "1a" / "ca2c799df82929bbdd976557975546.dir",
+        cache / "84" / "fe43362de8f1634c6fd2900440e9e2.dir",
         cache / "ac" / "bd18db4cc2f85cedef654fccc4a4d8",
     }
 
     dvc.commit(os.path.join("data", "subdir"))
     assert set(cache.glob("*/*")) == {
-        cache / "1a" / "ca2c799df82929bbdd976557975546.dir",
+        cache / "84" / "fe43362de8f1634c6fd2900440e9e2.dir",
         cache / "ac" / "bd18db4cc2f85cedef654fccc4a4d8",
         cache / "4c" / "e8d2a2cf314a52fa7f315ca37ca445",
         cache / "68" / "dde2c3c4e7953c2290f176bbdc9a54",
+        cache / "26" / "d6b64d96a660707412f523e8184b5f.dir",
+        cache / "23" / "dae188d1babe6223f8528a2e956b15.dir",
     }
 
     dvc.commit(os.path.join("data"))
     assert set(cache.glob("*/*")) == {
-        cache / "1a" / "ca2c799df82929bbdd976557975546.dir",
+        cache / "84" / "fe43362de8f1634c6fd2900440e9e2.dir",
         cache / "ac" / "bd18db4cc2f85cedef654fccc4a4d8",
         cache / "4c" / "e8d2a2cf314a52fa7f315ca37ca445",
         cache / "68" / "dde2c3c4e7953c2290f176bbdc9a54",
         cache / "37" / "b51d194a7513e45b56f6524f2d51f2",
+        cache / "26" / "d6b64d96a660707412f523e8184b5f.dir",
+        cache / "23" / "dae188d1babe6223f8528a2e956b15.dir",
+        cache / "1a" / "ca2c799df82929bbdd976557975546.dir",
     }
 
 
@@ -207,7 +211,6 @@ def test_imported_entries_unchanged(tmp_dir, dvc, erepo_dir):
     assert stage.changed_entries() == ([], [], None)
 
 
-@pytest.mark.xfail
 def test_commit_updates_to_cloud_versioning_dir(tmp_dir, dvc):
     data_dvc = tmp_dir / "data.dvc"
     data_dvc.dump(

@@ -73,7 +73,6 @@ def test_locked(mocker):
     ]
 
 
-@pytest.mark.xfail
 def test_skip_graph_checks(tmp_dir, dvc, mocker, run_copy):
     # See https://github.com/iterative/dvc/issues/2671 for more info
     from dvc.repo.index import Index
@@ -90,7 +89,6 @@ def test_skip_graph_checks(tmp_dir, dvc, mocker, run_copy):
     mock_build_graph.reset_mock()
     dvc._skip_graph_checks = True
     tmp_dir.gen("baz", "baz text")
-    dvc.add("baz")
     run_copy("baz", "qux", single_stage=True)
     assert not mock_build_graph.called
 
@@ -98,7 +96,6 @@ def test_skip_graph_checks(tmp_dir, dvc, mocker, run_copy):
     mock_build_graph.reset_mock()
     dvc._skip_graph_checks = False
     tmp_dir.gen("quux", "quux text")
-    dvc.add("quux")
     run_copy("quux", "quuz", single_stage=True)
     assert mock_build_graph.called
 

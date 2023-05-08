@@ -561,27 +561,28 @@ class Stage(params.StageParams):
         if link_failures:
             raise CacheLinkError(link_failures)
 
-    def add_deps(self, filter_info=None, allow_missing: bool = False, **kwargs):
-        from dvc.dependency.base import DependencyDoesNotExistError
-
-        link_failures = []
-        for dep in self.filter_deps(filter_info):
-            try:
-                dep.add(filter_info, **kwargs)
-            except (FileNotFoundError, DependencyDoesNotExistError):
-                if not allow_missing:
-                    raise
-            except CacheLinkError:
-                link_failures.append(filter_info or dep.fs_path)
-
-        if link_failures:
-            raise CacheLinkError(link_failures)
-
     @rwlocked(write=["outs"])
-    def add_outs(self, filter_info=None, allow_missing: bool = False, **kwargs):
+    def add_outs(  # noqa: C901
+        self, filter_info=None, allow_missing: bool = False, **kwargs
+    ):
         from dvc.output import OutputDoesNotExistError
 
+        from .exceptions import StageFileDoesNotExistError, StageNotFound
+
         link_failures = []
+
+        try:
+            old = self.reload()
+            old_outs = {out.def_path: out for out in old.outs}
+            merge_versioned = any(
+                (
+                    out.files is not None
+                    or (out.meta is not None and out.meta.version_id is not None)
+                )
+                for out in old_outs.values()
+            )
+        except (StageFileDoesNotExistError, StageNotFound):
+            merge_versioned = False
 
         for out in self.filter_outs(filter_info):
             try:
@@ -591,6 +592,11 @@ class Stage(params.StageParams):
                     raise
             except CacheLinkError:
                 link_failures.append(filter_info or out.fs_path)
+
+            if merge_versioned:
+                old_out = old_outs.get(out.def_path)
+                if old_out is not None:
+                    out.merge_version_meta(old_out)
 
         if link_failures:
             raise CacheLinkError(link_failures)

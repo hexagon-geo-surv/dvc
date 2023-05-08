@@ -1144,7 +1144,6 @@ def test_add_with_annotations(M, tmp_dir, dvc):
     assert (tmp_dir / "foo.dvc").parse() == M.dict(outs=[M.dict(**annot)])
 
 
-@pytest.mark.xfail
 def test_add_updates_to_cloud_versioning_dir(tmp_dir, dvc):
     data_dvc = tmp_dir / "data.dvc"
     data_dvc.dump(

@@ -261,7 +261,6 @@ class TestRemoteWorktree:
             tmp_dir / "data_dir" / "data_sub_dir" / "data_sub"
         ).read_text() == "data_sub"
 
-    @pytest.mark.xfail
     def test_deletion(
         self, tmp_dir, dvc, scm, remote_worktree  # pylint: disable=W0613
     ):
