@@ -26,7 +26,7 @@ from dvc_data.hashfile import check as ocheck
 from dvc_data.hashfile import load as oload
 from dvc_data.hashfile.build import build
 from dvc_data.hashfile.checkout import checkout
-from dvc_data.hashfile.db import HashFileDB
+from dvc_data.hashfile.db import HashFileDB, add_update_tree
 from dvc_data.hashfile.hash_info import HashInfo
 from dvc_data.hashfile.istextfile import istextfile
 from dvc_data.hashfile.meta import Meta
@@ -1232,6 +1232,7 @@ class Output:
     def apply(
         self,
         path: str,
+        cache: "HashFileDB",
         obj: Union["Tree", "HashFile"],
         meta: "Meta",
     ) -> Tuple["Meta", "Tree"]:
@@ -1274,6 +1275,7 @@ class Output:
             size += meta.size
 
         meta = Meta(nfiles=len(new), size=size)
+        add_update_tree(cache, new)
         return meta, new
 
     def add(
@@ -1309,11 +1311,10 @@ class Output:
             meta, new = self.unstage(path)
             staging, obj = None, None
         else:
-            if self.fs_path != path and isinstance(obj, Tree):
-                meta, new = self.apply(path, obj, meta)
-            else:
-                assert obj
-                new = obj
+            assert obj
+            assert staging
+            subpath = self.fs_path != path
+            meta, new = self.apply(path, staging, obj, meta) if subpath else (meta, obj)
 
         self.obj = new
         self.hash_info = self.obj.hash_info
@@ -1321,12 +1322,19 @@ class Output:
         self.files = None
         self.ignore()
 
-        if not obj or no_commit or not self.use_cache:
+        if no_commit or not self.use_cache:
+            return obj
+
+        if isinstance(new, Tree):
+            add_update_tree(cache, new)
+
+        if not obj:
             return obj
 
         assert staging
         assert obj.hash_info
-        otransfer(staging, self.cache, {obj.hash_info}, shallow=False)
+        otransfer(staging, self.cache, {obj.hash_info}, hardlink=False, shallow=False)
+
         if relink:
             self._checkout(
                 path,
