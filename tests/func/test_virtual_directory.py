@@ -1,4 +1,5 @@
 import shutil
+from os.path import join
 
 import pytest
 
@@ -105,7 +106,7 @@ def test_partial_checkout_and_update(M, tmp_dir, dvc, remote, add_or_commit):
     shutil.rmtree("dir")
 
     assert dvc.pull("dir/subdir") == M.dict(
-        added=["dir/"],
+        added=[join("dir", "")],
         fetched=1,
     )
     assert (tmp_dir / "dir").read_text() == {"subdir": {"lorem": "lorem"}}
