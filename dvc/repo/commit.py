@@ -1,5 +1,7 @@
 from typing import TYPE_CHECKING
 
+from dvc.ui import ui
+
 from . import locked
 
 if TYPE_CHECKING:
@@ -29,4 +31,8 @@ def commit(
         stage.add_deps(filter_info, allow_missing=allow_missing, relink=relink)
         stage.add_outs(filter_info, allow_missing=allow_missing, relink=relink)
         stage.dump(update_pipeline=False)
+        ui.rich_print(
+            "\t[bold green]Committed".expandtabs(4),
+            ui.rich_text(filter_info or stage.addressing),
+        )
     return [s.stage for s in stages_info]
