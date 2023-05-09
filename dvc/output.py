@@ -1334,7 +1334,7 @@ class Output:
 
         assert staging
         assert obj.hash_info
-        otransfer(staging, self.cache, {obj.hash_info}, hardlink=False, shallow=False)
+        otransfer(staging, self.cache, {obj.hash_info}, hardlink=relink, shallow=False)
 
         if relink:
             self._checkout(
