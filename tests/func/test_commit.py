@@ -87,7 +87,7 @@ def test_commit_no_exec(tmp_dir, dvc):
     stage = dvc.run(name="my", cmd="mycmd", deps=["dep"], outs=["out"], no_exec=True)
 
     assert dvc.status(stage.path)
-    dvc.commit(stage.path, force=True)
+    dvc.commit(stage.path)
     assert dvc.status(stage.path) == {}
 
 
@@ -178,7 +178,7 @@ def test_commit_no_exec_missing_dep(tmp_dir, dvc):
     assert dvc.status(stage.path)
 
     with pytest.raises(DependencyDoesNotExistError):
-        dvc.commit(stage.path, force=True)
+        dvc.commit(stage.path)
 
 
 def test_commit_no_exec_missing_out(tmp_dir, dvc):
@@ -186,14 +186,14 @@ def test_commit_no_exec_missing_out(tmp_dir, dvc):
     assert dvc.status(stage.path)
 
     with pytest.raises(OutputDoesNotExistError):
-        dvc.commit(stage.path, force=True)
+        dvc.commit(stage.path)
 
 
 def test_commit_pipeline_stage(tmp_dir, dvc, run_copy):
     tmp_dir.gen("foo", "foo")
     stage = run_copy("foo", "bar", no_commit=True, name="copy-foo-bar")
     assert dvc.status(stage.addressing)
-    assert dvc.commit(stage.addressing, force=True) == [stage]
+    assert dvc.commit(stage.addressing) == [stage]
     assert not dvc.status(stage.addressing)
 
     # just to confirm different variants work
@@ -244,7 +244,7 @@ def test_commit_updates_to_cloud_versioning_dir(tmp_dir, dvc):
     (data / "foo").write_text("foo")
     (data / "bar").write_text("bar2")
 
-    dvc.commit("data", force=True)
+    dvc.commit("data")
 
     assert (tmp_dir / "data.dvc").parse() == {
         "outs": [

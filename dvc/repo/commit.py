@@ -17,7 +17,6 @@ def commit(
     allow_missing=False,
     data_only=False,
     relink=True,
-    **kwargs,
 ):
     stages_info = [
         info
