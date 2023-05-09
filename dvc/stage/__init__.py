@@ -43,7 +43,6 @@ from .utils import (
 )
 
 if TYPE_CHECKING:
-    from dvc.dependency.base import Dependency
     from dvc.dvcfile import ProjectFile, SingleStageFile
     from dvc.output import Output
     from dvc.repo import Repo
@@ -496,34 +495,34 @@ class Stage(params.StageParams):
                 if not allow_missing:
                     raise
 
-    def save_outs(self, allow_missing: bool = False):
-        from dvc.output import OutputDoesNotExistError
-
+    def get_versioned_outs(self) -> Dict[str, "Output"]:
         from .exceptions import StageFileDoesNotExistError, StageNotFound
 
         try:
             old = self.reload()
-            old_outs = {out.def_path: out for out in old.outs}
-            merge_versioned = any(
-                (
-                    out.files is not None
-                    or (out.meta is not None and out.meta.version_id is not None)
-                )
-                for out in old_outs.values()
-            )
         except (StageFileDoesNotExistError, StageNotFound):
-            merge_versioned = False
+            return {}
 
+        return {
+            out.def_path: out
+            for out in old.outs
+            if out.files is not None
+            or (out.meta is not None and out.meta.version_id is not None)
+        }
+
+    def save_outs(self, allow_missing: bool = False):
+        from dvc.output import OutputDoesNotExistError
+
+        old_versioned_outs = self.get_versioned_outs()
         for out in self.outs:
             try:
                 out.save()
             except OutputDoesNotExistError:
                 if not (allow_missing or out.checkpoint):
                     raise
-            if merge_versioned:
-                old_out = old_outs.get(out.def_path)
-                if old_out is not None:
-                    out.merge_version_meta(old_out)
+
+            if old_out := old_versioned_outs.get(out.def_path):
+                out.merge_version_meta(old_out)
 
     def ignore_outs(self) -> None:
         for out in self.outs:
@@ -567,23 +566,8 @@ class Stage(params.StageParams):
     ):
         from dvc.output import OutputDoesNotExistError
 
-        from .exceptions import StageFileDoesNotExistError, StageNotFound
-
         link_failures = []
-
-        try:
-            old = self.reload()
-            old_outs = {out.def_path: out for out in old.outs}
-            merge_versioned = any(
-                (
-                    out.files is not None
-                    or (out.meta is not None and out.meta.version_id is not None)
-                )
-                for out in old_outs.values()
-            )
-        except (StageFileDoesNotExistError, StageNotFound):
-            merge_versioned = False
-
+        old_versioned_outs = self.get_versioned_outs()
         for out in self.filter_outs(filter_info):
             try:
                 out.add(filter_info, **kwargs)
@@ -593,10 +577,8 @@ class Stage(params.StageParams):
             except CacheLinkError:
                 link_failures.append(filter_info or out.fs_path)
 
-            if merge_versioned:
-                old_out = old_outs.get(out.def_path)
-                if old_out is not None:
-                    out.merge_version_meta(old_out)
+            if old_out := old_versioned_outs.get(out.def_path):
+                out.merge_version_meta(old_out)
 
         if link_failures:
             raise CacheLinkError(link_failures)
@@ -660,12 +642,6 @@ class Stage(params.StageParams):
             return o.fs.path.isin_or_eq(fs_path, o.fs_path)
 
         return filter(_func, self.outs) if fs_path else self.outs
-
-    def filter_deps(self, fs_path) -> Iterable["Dependency"]:
-        def _func(o):
-            return o.fs.path.isin_or_eq(fs_path, o.fs_path)
-
-        return filter(_func, self.deps) if fs_path else self.deps
 
     @rwlocked(write=["outs"])
     def checkout(
