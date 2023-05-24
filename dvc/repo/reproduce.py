@@ -107,7 +107,7 @@ def reproduce(  # noqa: C901, PLR0912
                 )
             )
 
-    if kwargs.get("pull", False):
+    if kwargs.get("pull", False) and kwargs.get("run_cache", True):
         logger.debug("Pulling run cache")
         try:
             self.stage_cache.pull(None)
