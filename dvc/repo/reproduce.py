@@ -4,10 +4,13 @@ from typing import TYPE_CHECKING, Iterator, List
 
 from dvc.exceptions import DvcException, ReproductionError
 from dvc.repo.scm_context import scm_context
+
 <<<<<<< HEAD
 from dvc.stage.exceptions import CheckpointKilledError
+
 =======
 from dvc.stage.cache import RunCacheNotSupported
+
 >>>>>>> e98bf38d4 (repro: Continue on RunCacheNotSupported)
 
 from . import locked
