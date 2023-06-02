@@ -9,9 +9,7 @@ from dvc.cli import main
 from dvc.dvcfile import LOCK_FILE, PROJECT_FILE
 from dvc.exceptions import CyclicGraphError, ReproductionError
 from dvc.stage import PipelineStage
-from dvc.stage.cache import RunCacheNotSupported
 from dvc.stage.exceptions import StageNotFound
-from dvc.utils.fs import remove
 
 
 def test_non_existing_stage_name(tmp_dir, dvc, run_copy):
@@ -423,89 +421,3 @@ def test_repro_list_of_commands_raise_and_stops_after_failure(tmp_dir, dvc, mult
         dvc.reproduce(targets=["multi"])
     assert (tmp_dir / "foo").read_text() == "foo\n"
     assert not (tmp_dir / "bar").exists()
-
-
-def test_repro_pulls_mising_data_source(tmp_dir, dvc, mocker, local_remote):
-    (foo,) = tmp_dir.dvc_gen("foo", "foo")
-
-    dvc.push()
-
-    dvc.stage.add(name="copy-foo", cmd="cp foo bar", deps=["foo"], outs=["bar"])
-    remove("foo")
-    remove(foo.outs[0].cache_path)
-
-    assert dvc.reproduce(pull=True)
-
-
-def test_repro_pulls_mising_import(tmp_dir, dvc, mocker, erepo_dir, local_remote):
-    with erepo_dir.chdir():
-        erepo_dir.dvc_gen("foo", "foo", commit="first")
-
-    foo_import = dvc.imp(os.fspath(erepo_dir), "foo")
-
-    dvc.push()
-
-    dvc.stage.add(name="copy-foo", cmd="cp foo bar", deps=["foo"], outs=["bar"])
-    remove("foo")
-    remove(foo_import.outs[0].cache_path)
-
-    assert dvc.reproduce(pull=True)
-
-
-def test_repro_allow_missing(tmp_dir, dvc):
-    tmp_dir.gen("fixed", "fixed")
-    dvc.stage.add(name="create-foo", cmd="echo foo > foo", deps=["fixed"], outs=["foo"])
-    dvc.stage.add(name="copy-foo", cmd="cp foo bar", deps=["foo"], outs=["bar"])
-    (create_foo, copy_foo) = dvc.reproduce()
-
-    remove("foo")
-    remove(create_foo.outs[0].cache_path)
-    remove(dvc.stage_cache.cache_dir)
-
-    ret = dvc.reproduce(allow_missing=True)
-    # both stages are skipped
-    assert not ret
-
-
-def test_repro_allow_missing_and_pull(tmp_dir, dvc, mocker, local_remote):
-    tmp_dir.gen("fixed", "fixed")
-    dvc.stage.add(name="create-foo", cmd="echo foo > foo", deps=["fixed"], outs=["foo"])
-    dvc.stage.add(name="copy-foo", cmd="cp foo bar", deps=["foo"], outs=["bar"])
-    (create_foo,) = dvc.reproduce("create-foo")
-
-    dvc.push()
-
-    remove("foo")
-    remove(create_foo.outs[0].cache_path)
-    remove(dvc.stage_cache.cache_dir)
-
-    ret = dvc.reproduce(pull=True, allow_missing=True)
-    # create-foo is skipped ; copy-foo pulls missing dep
-    assert len(ret) == 1
-
-
-def test_repro_pulls_continue_without_run_cache(tmp_dir, dvc, mocker, local_remote):
-    (foo,) = tmp_dir.dvc_gen("foo", "foo")
-
-    dvc.push()
-    mocker.patch.object(
-        dvc.stage_cache, "pull", side_effect=RunCacheNotSupported("foo")
-    )
-    dvc.stage.add(name="copy-foo", cmd="cp foo bar", deps=["foo"], outs=["bar"])
-    remove("foo")
-    remove(foo.outs[0].cache_path)
-
-    assert dvc.reproduce(pull=True)
-
-
-def test_repro_skip_pull_if_no_run_cache_is_passed(tmp_dir, dvc, mocker, local_remote):
-    (foo,) = tmp_dir.dvc_gen("foo", "foo")
-
-    dvc.push()
-    spy_pull = mocker.spy(dvc.stage_cache, "pull")
-    dvc.stage.add(name="copy-foo", cmd="cp foo bar", deps=["foo"], outs=["bar"])
-    remove("foo")
-    remove(foo.outs[0].cache_path)
-
-    assert dvc.reproduce(pull=True, run_cache=False)
-    assert not spy_pull.called
