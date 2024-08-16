@@ -60,14 +60,14 @@ def dvc_venvs():
 
 
 @pytest.fixture(scope="session")
-def dvc_git_repo(tmp_path_factory, bench_config):
+def dvc_git_repo(tmp_path_factory, dvc_rev, bench_config):
     url = bench_config.dvc_git_repo
 
     if os.path.isdir(url):
         return url
 
     tmp_path = tmp_path_factory.mktemp("dvc-git-repo")
-    clone(url, os.fspath(tmp_path))
+    clone(url, os.fspath(tmp_path), branch=dvc_rev)
 
     return tmp_path
 
