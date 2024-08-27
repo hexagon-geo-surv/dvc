@@ -13,7 +13,6 @@ from fsspec.spec import DEFAULT_CALLBACK, AbstractFileSystem
 from funcy import wrap_with
 
 from dvc.log import logger
-from dvc.utils.threadpool import ThreadPoolExecutor
 from dvc_objects.fs.base import AnyFSPath, FileSystem
 
 from .data import DataFileSystem
@@ -570,8 +569,8 @@ class _DVCFileSystem(AbstractFileSystem):
                 self.get_file(src, dest, callback=callback, **kwargs)
             return src, dest, info
 
-        with ThreadPoolExecutor(max_workers=batch_size) as executor:
-            return list(executor.imap_unordered(_get_file, _files))
+        # with ThreadPoolExecutor(max_workers=batch_size) as executor:
+        return list(map(_get_file, _files))
 
     def get_file(self, rpath, lpath, **kwargs):
         key = self._get_key_from_relative(rpath)
