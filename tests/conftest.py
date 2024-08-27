@@ -53,6 +53,23 @@ def reset_loglevel(request, caplog):
         yield
 
 
+@pytest.fixture(autouse=True, scope="session")
+def mocked_diskcache_reset(session_mocker):
+    from diskcache import ENOVAL
+    from diskcache.core import DEFAULT_SETTINGS
+
+    def reset(self, key, value=..., update=True):
+        if not hasattr(self, "_settings"):
+            self._settings = DEFAULT_SETTINGS.copy()
+        if value is ENOVAL:
+            return getattr(self, key, self._settings[key])
+        if update:
+            setattr(self, key, value)
+            self._settings[key] = value
+
+    return session_mocker.patch("diskcache.core.Cache.reset", reset)
+
+
 @pytest.fixture(autouse=True)
 def enable_ui():
     from dvc.ui import ui
