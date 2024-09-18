@@ -752,7 +752,10 @@ class Output:
             granular = (
                 self.is_dir_checksum and filter_info and filter_info != self.fs_path
             )
-            hardlink = relink and next(iter(self.cache.cache_types), None) == "hardlink"
+            hardlink = relink and next(iter(self.cache.cache_types), None) in (
+                "hardlink",
+                "symlink",
+            )
             if granular:
                 obj = self._commit_granular_dir(filter_info, hardlink=hardlink)
             else:
@@ -1401,7 +1404,10 @@ class Output:
         assert staging
         assert obj.hash_info
 
-        hardlink = relink and next(iter(self.cache.cache_types), None) == "hardlink"
+        hardlink = relink and next(iter(self.cache.cache_types), None) in (
+            "hardlink",
+            "symlink",
+        )
         with TqdmCallback(desc=f"Adding {self} to cache", unit="file") as cb:
             otransfer(
                 staging,
