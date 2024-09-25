@@ -12,33 +12,42 @@ env:
 jobs:
   bench:
     name: run benchmarks
-    runs-on: ubuntu-latest
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
     steps:
       - uses: actions/setup-python@v5
         with:
             python-version: "3.12"
+
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
 
       - uses: astral-sh/setup-uv@v3
         with:
           enable-cache: true
           cache-dependency-glob: pyproject.toml
 
-      - uses: actions/checkout@v4
+      - run: uv pip install '.[dev]' --system
+      - run: uv pip install 'dvc-objects @ git+https://github.com/iterative/dvc-objects.git@no-copy-owner-info' --system
+      - run: curl -O https://image-net.org/data/bboxes_annotations.tar.gz
+      - run: tar zxvf bboxes_annotations.tar.gz
+      - run: rm bboxes_annotations.tar.gz
+      - run: |
+          for file in ./*.tar.gz; do
+            tar zxvf $file
+          done
+        shell: bash
+      - run: time dvc add Annotation/ --cprofile-dump add.prof
+        shell: bash
+      - run: cat ./*.dvc
+        shell: bash
+      - run: time dvc add Annotation/ --cprofile-dump noop.prof
+        shell: bash
+      - uses: actions/upload-artifact@v4
         with:
-          ref: ${{ github.event.pull_request.base.sha }}
-          fetch-depth: 0
-
-      - run: uv pip install '.[tests]' --system
-      - name: run benchmarks on base branch
-        run: pytest --benchmark-autosave dvc/testing/benchmarks/ -k 'test_init or test_help'
-
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
-          clean: false
-      - run: uv pip install '.[tests]' --system
-      - name: run benchmarks for PR
-        run: >
-          pytest --benchmark-compare --benchmark-compare-fail=min:5%
-          --benchmark-group-by name
-          dvc/testing/benchmarks/ -k 'test_init or test_help'
+          name: profiling-${{ matrix.os }}
+          path: '*.prof'
