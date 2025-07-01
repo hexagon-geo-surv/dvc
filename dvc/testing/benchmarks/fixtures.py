@@ -125,6 +125,10 @@ def make_dvc_bin(
         check_call([dvc_bin, *args])  # noqa: S603
 
     _dvc_bin.version = check_output([dvc_bin, "--version"], text=True)  # type: ignore[attr-defined]  # noqa: S603
+
+    if version.Version(_dvc_bin.version) < version.Version("2.42.0"):
+        venv.install("pathspec<0.10")
+
     return _dvc_bin
 
 
