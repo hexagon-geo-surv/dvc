@@ -47,6 +47,7 @@ from global repo template to creating everything inplace, which:
 
 import os
 import pathlib
+import sys
 from contextlib import contextmanager
 from textwrap import dedent
 
@@ -76,18 +77,22 @@ disable_other_loggers()
 class TmpDir(pathlib.Path):
     scheme = "local"
 
-    def __new__(cls, *args, **kwargs):
-        if cls is TmpDir:
-            cls = (  # pylint: disable=self-cls-assignment
-                WindowsTmpDir if os.name == "nt" else PosixTmpDir
-            )
-        self = cls._from_parts(args, init=False)
-        if not self._flavour.is_supported:
-            raise NotImplementedError(
-                f"cannot instantiate {cls.__name__!r} on your system"
-            )
-        self._init()
-        return self
+    if sys.version_info < (3, 12):
+
+        def __new__(cls, *args, **kwargs):
+            if cls is TmpDir:
+                cls = WindowsTmpDir if os.name == "nt" else PosixTmpDir  # noqa: PLW0642
+
+            # init parameter and `_init` method has been removed in Python 3.10.
+            kw = {"init": False} if sys.version_info < (3, 10) else {}
+            self = cls._from_parts(args, **kw)  # type: ignore[attr-defined]
+            if not self._flavour.is_supported:
+                raise NotImplementedError(
+                    f"cannot instantiate {cls.__name__!r} on your system"
+                )
+            if sys.version_info < (3, 10):
+                self._init()
+            return self
 
     def init(self, *, scm=False, dvc=False, subdir=False):
         from dvc.repo import Repo

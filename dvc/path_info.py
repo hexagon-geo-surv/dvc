@@ -1,5 +1,6 @@
 # pylint: disable=protected-access
 import os
+import sys
 import pathlib
 import posixpath
 from typing import Callable
@@ -29,23 +30,24 @@ class PathInfo(pathlib.PurePath, _BasePath):
     __slots__ = ()
     scheme = "local"
 
-    def __new__(cls, *args):
-        # Construct a proper subclass depending on current os
-        if cls is PathInfo:
-            cls = (  # pylint: disable=self-cls-assignment
-                WindowsPathInfo if os.name == "nt" else PosixPathInfo
-            )
+    if sys.version_info < (3, 12):
 
-        return cls._from_parts(args)
+        def __new__(cls, *args):
+            # Construct a proper subclass depending on current os
+            if cls is PathInfo:
+                cls = (  # pylint: disable=self-cls-assignment
+                    WindowsPathInfo if os.name == "nt" else PosixPathInfo
+                )
+
+            return cls._from_parts(args)
 
     def as_posix(self):
-        f = self._flavour  # pylint: disable=no-member
         # Unlike original implementation [1] that uses `str()` we actually need
         # to use `fspath`, because we've overridden `__str__` method to return
         # relative paths, which will break original `as_posix`.
         #
         # [1] https://github.com/python/cpython/blob/v3.7.0/Lib/pathlib.py#L692
-        return self.fspath.replace(f.sep, "/")
+        return self.fspath.replace(self.parser.sep, "/")
 
     def __str__(self):
         path = self.__fspath__()
@@ -73,8 +75,11 @@ class PathInfo(pathlib.PurePath, _BasePath):
         elif self.__class__ != other.__class__:
             return False
         # Use cached casefolded parts to compare paths
-        n = len(other._cparts)
-        return len(self._cparts) > n and self._cparts[:n] == other._cparts
+        n = len(other._parts_normcase)
+        return (
+            len(self._parts_normcase) > n
+            and self._parts_normcase[:n] == other._parts_normcase
+        )
 
     def relative_to(self, other):  # pylint: disable=arguments-differ
         # pathlib relative_to raises exception when one path is not a direct
