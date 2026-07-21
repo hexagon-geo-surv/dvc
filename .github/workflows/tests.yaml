@@ -30,7 +30,7 @@ jobs:
       with:
         fetch-depth: 0
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: '3.14'
     - uses: astral-sh/setup-uv@v7
@@ -134,7 +134,7 @@ jobs:
       with:
         fetch-depth: 0
     - name: Set up Python
-      uses: actions/setup-python@v6
+      uses: actions/setup-python@v7
       with:
         python-version: ${{ matrix.pyv }}
     - uses: astral-sh/setup-uv@v7
