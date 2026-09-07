@@ -20,6 +20,36 @@ def test_check_ignore(tmp_dir, dvc, file, ret, output, caplog, capsys):
 
 
 @pytest.mark.parametrize(
+    "pattern, exception, ignored",
+    [
+        ("volumes/functions/**", "volumes/functions/deno.json", False),
+        ("volumes/functions/**", "volumes/functions/deno.json*", False),
+        ("volumes/functions/", "volumes/functions/deno.json", True),
+        ("ignore.txt", "no-ignore.txt", False),
+        ("*ignore.txt", "no-ignore.txt", False),
+    ],
+)
+def test_check_ignore_reinclude(tmp_dir, dvc, pattern, exception, ignored):
+    tmp_dir.gen(
+        {
+            ".dvcignore": f"{pattern}\n!{exception}\n",
+            "volumes": {"functions": {"deno.json": "", "other.py": ""}},
+            "ignore.txt": "",
+            "no-ignore.txt": "",
+        }
+    )
+    file = exception.rstrip("*").replace("/", os.sep)
+    sibling = (
+        os.path.join("volumes", "functions", "other.py")
+        if pattern.startswith("volumes/")
+        else "ignore.txt"
+    )
+
+    assert main(["check-ignore", "-q", file]) == (0 if ignored else 1)
+    assert main(["check-ignore", "-q", sibling]) == 0
+
+
+@pytest.mark.parametrize(
     "file,ret,output",
     [
         ("file", 0, f"{DvcIgnore.DVCIGNORE_FILE}:1:f*\tfile\n"),

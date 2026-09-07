@@ -4,6 +4,64 @@ from os.path import join
 import pytest
 
 from dvc.ignore import DvcIgnorePatterns
+from dvc.pathspec_math import PatternInfo
+
+
+def test_match_details_combined_patterns():
+    patterns = [
+        PatternInfo("*.tmp", ".dvcignore:1:*.tmp"),
+        PatternInfo("*.log", ".dvcignore:2:*.log"),
+        PatternInfo("build/", ".dvcignore:3:build/"),
+        PatternInfo("cache/", ".dvcignore:4:cache/"),
+        PatternInfo("!keep.log", ".dvcignore:5:!keep.log"),
+    ]
+    ignore = DvcIgnorePatterns(patterns, "/repo", "/")
+    for _ in range(2):
+        assert ignore.matches("/repo", "data/error.log", details=True) == (
+            True,
+            [patterns[1]],
+        )
+        assert ignore.matches("/repo", "cache/keep.log", details=True) == (
+            True,
+            [patterns[3]],
+        )
+        assert ignore.matches("/repo", "data/keep.log", details=True) == (
+            False,
+            [patterns[4]],
+        )
+
+
+@pytest.mark.parametrize("path", ["data/file.tmp", "build/file.txt"])
+def test_match_details_mutation(path):
+    ignore = DvcIgnorePatterns(["*.tmp", "build/"], "/repo", "/")
+    result, details = ignore.matches("/repo", path, details=True)
+    expected = details.copy()
+    details.clear()
+
+    assert result
+    assert expected
+    assert ignore.matches("/repo", path, details=True) == (True, expected)
+
+
+@pytest.mark.parametrize(
+    "root, expected_dirs, expected_files",
+    [
+        ("/repo", ["child"], ["keep.txt", "logs"]),
+        ("/repo/dir", [], ["keep.txt"]),
+        ("/repo/ignored/dir", [], []),
+        ("/repo2", ["logs", "ignored", "child"], ["keep.txt", "other.tmp", "logs"]),
+    ],
+)
+def test_filter_directory_listing(root, expected_dirs, expected_files):
+    ignore = DvcIgnorePatterns(
+        ["ignored/", "dir/**", "!dir/keep.txt", "logs/", "*.tmp"], "/repo", "/"
+    )
+    dirs = ["logs", "ignored", "child"]
+    files = ["keep.txt", "other.tmp", "logs"]
+    for _ in range(2):
+        assert ignore(root, dirs, files) == (expected_dirs, expected_files)
+    assert dirs == ["logs", "ignored", "child"]
+    assert files == ["keep.txt", "other.tmp", "logs"]
 
 
 @pytest.mark.parametrize(

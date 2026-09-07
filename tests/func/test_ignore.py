@@ -31,6 +31,50 @@ def test_ignore(tmp_dir, dvc, filename):
     }
 
 
+@pytest.mark.parametrize("suffix, ignored", [("/**", False), ("/", True), ("", True)])
+@pytest.mark.parametrize("exception", ["deno.json", "deno.json*"])
+def test_reinclude_directory_contents(tmp_dir, dvc, suffix, ignored, exception):
+    tmp_dir.gen(
+        {
+            ".dvcignore": (
+                f"volumes/functions{suffix}\n!volumes/functions/{exception}\n"
+            ),
+            "volumes": {"functions": {"deno.json": "", "other.py": ""}},
+        }
+    )
+    dvc._reset()
+
+    directory = tmp_dir / "volumes" / "functions"
+    assert dvc.dvcignore.is_ignored_dir(str(directory)) is ignored
+    assert dvc.dvcignore.is_ignored_file(str(directory / "deno.json")) is ignored
+    assert dvc.dvcignore.is_ignored_file(str(directory / "other.py"))
+
+    files = {
+        os.path.join(root, name)
+        for root, _, names in dvc.dvcignore.walk(dvc.fs, tmp_dir)
+        for name in names
+    }
+    expected = {str(tmp_dir / ".dvcignore")}
+    if not ignored:
+        expected.add(str(directory / "deno.json"))
+    assert files == expected
+
+
+@pytest.mark.parametrize("pattern", ["ignore.txt", "*ignore.txt"])
+def test_reinclude_root_file(tmp_dir, dvc, pattern):
+    tmp_dir.gen(
+        {
+            ".dvcignore": f"{pattern}\n!no-ignore.txt\n",
+            "ignore.txt": "",
+            "no-ignore.txt": "",
+        }
+    )
+    dvc._reset()
+
+    assert dvc.dvcignore.is_ignored_file(str(tmp_dir / "ignore.txt"))
+    assert not dvc.dvcignore.is_ignored_file(str(tmp_dir / "no-ignore.txt"))
+
+
 def test_walk(tmp_dir, dvc):
     tmp_dir.gen(
         {

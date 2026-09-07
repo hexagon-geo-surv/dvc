@@ -60,13 +60,16 @@ class DvcIgnorePatterns(DvcIgnore):
         self.pattern_list: list[PatternInfo] = []
         self.dirname = dirname
         self.find_matching_pattern = functools.cache(self._find_matching_pattern)
+        self._ignore_parents = functools.cache(self._ignore_parents)
 
         regex_pattern_list: list[tuple[str, bool, bool, PatternInfo]] = []
-        for count, pattern_info in enumerate(pattern_infos):
+        for pattern_info in pattern_infos:
             regex, ignore = GitIgnoreSpecPattern.pattern_to_regex(pattern_info.patterns)
             if regex is not None and ignore is not None:
                 self.pattern_list.append(pattern_info)
-                regex = regex.replace(f"<{_DIR_MARK}>", f"<{_DIR_MARK}{count}>")
+                # DVC resolves directory matches itself; only the outer rule
+                # group is needed to identify a match in the combined regex.
+                regex = regex.replace(f"(?P<{_DIR_MARK}>", "(?:")
                 regex_pattern_list.append(
                     (regex, ignore, pattern_info.patterns.endswith("/"), pattern_info)
                 )
@@ -126,8 +129,20 @@ class DvcIgnorePatterns(DvcIgnore):
     def __call__(
         self, root: str, dirs: list[str], files: list[str]
     ) -> tuple[list[str], list[str]]:
-        files = [f for f in files if not self.matches(root, f)]
-        dirs = [d for d in dirs if not self.matches(root, d, True)]
+        # Entries are basenames from one directory listing, so normalize the
+        # shared prefix and check its ancestors only once.
+        prefix = self._get_normalize_path(root, "")
+        if prefix is None:
+            return dirs.copy(), files.copy()
+        if prefix and self._ignore_parents(prefix[:-1])[0]:
+            return [], []
+
+        files = [
+            f for f in files if not self.find_matching_pattern(f"{prefix}{f}", False)[0]
+        ]
+        dirs = [
+            d for d in dirs if not self.find_matching_pattern(f"{prefix}{d}", True)[0]
+        ]
 
         return dirs, files
 
@@ -189,55 +204,51 @@ class DvcIgnorePatterns(DvcIgnore):
         _match: list[PatternInfo] = []
         if path:
             result, _match = self._ignore(path, is_dir)
-        return (result, _match) if details else result
+        return (result, _match.copy()) if details else result
 
     def _find_matching_pattern(
         self, path: str, is_dir: bool
     ) -> tuple[bool, list[PatternInfo]]:
-        paths = [path]
-        if is_dir and not path.endswith("/"):
-            paths.append(f"{path}/")
-
         for pattern, ignore, dir_only_pattern, pattern_map in reversed(
             self.ignore_spec
         ):
             if dir_only_pattern and not is_dir:
                 continue
-            for p in paths:
-                match = pattern.match(p)
-                if not match:
-                    continue
-                if ignore:
-                    group_name, _match = next(
-                        (
-                            (name, _match)
-                            for name, _match in match.groupdict().items()
-                            if name.startswith("rule_") and _match is not None
-                        )
-                    )
-                else:
-                    # unignored patterns are not combined with `|`,
-                    # so there are no groups.
-                    group_name = None
-                _regex, pattern_info = pattern_map[group_name]
-                return ignore, [pattern_info]
+            match = pattern.match(path)
+            # Only directory-only patterns need the trailing slash. Probing it
+            # for other patterns would make X/** exclude X itself.
+            if not match and dir_only_pattern and not path.endswith("/"):
+                match = pattern.match(f"{path}/")
+            if not match:
+                continue
+            if ignore:
+                group_name = match.lastgroup
+            else:
+                # unignored patterns are not combined with `|`,
+                # so there are no groups.
+                group_name = None
+            _regex, pattern_info = pattern_map[group_name]
+            return ignore, [pattern_info]
         return False, []
 
     def _ignore(self, path: str, is_dir: bool) -> tuple[bool, list[PatternInfo]]:
+        parent, sep, _ = path.rpartition("/")
+        if sep:
+            result = self._ignore_parents(parent)
+            if result[0]:
+                return result
+        return self.find_matching_pattern(path, is_dir)
+
+    def _ignore_parents(self, path: str) -> tuple[bool, list[PatternInfo]]:
+        # Files in the same directory share the ancestor verdict, not just
+        # individual regex matches. Cache it to avoid rebuilding every prefix.
         parts = path.split("/")
-        result = False
-        matches: list[PatternInfo] = []
         for i in range(1, len(parts) + 1):
             rel_path = "/".join(parts[:i])
-            result, _matches = self.find_matching_pattern(
-                rel_path, is_dir or i < len(parts)
-            )
-            if i < len(parts) and not result:
-                continue
-            matches.extend(_matches)
+            result, matches = self.find_matching_pattern(rel_path, True)
             if result:
-                break
-        return result, matches
+                return result, matches
+        return False, []
 
     def __hash__(self) -> int:
         return hash(self.dirname + ":" + str(self.pattern_list))
